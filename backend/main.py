@@ -1,9 +1,21 @@
 import re
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 app = FastAPI(title="Automated Answer Sheet Grader")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 STOP_WORDS = {
     "a", "an", "the", "and", "or", "is", "are", "was", "were",
@@ -38,12 +50,10 @@ def grade_answer(data: GradeRequest):
 
     matched_words = model_words.intersection(student_words)
     missing_words = model_words - student_words
-
     similarity = len(matched_words) / len(model_words)
-    score = round(similarity * data.max_marks, 1)
 
     return {
-        "score": score,
+        "score": round(similarity * data.max_marks, 1),
         "max_marks": data.max_marks,
         "confidence": round(similarity * 100, 1),
         "matched_words": sorted(matched_words),
