@@ -7,6 +7,8 @@ function App() {
   const [maxMarks, setMaxMarks] = useState(5);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
+  const [finalScore, setFinalScore] = useState("");
+  const [approved, setApproved] = useState(false);
 
   async function gradeAnswer(event) {
     event.preventDefault();
@@ -31,6 +33,8 @@ function App() {
       }
 
       setResult(data);
+      setFinalScore(data.score);
+      setApproved(false);
     } catch (err) {
       setError(err.message);
     }
@@ -78,15 +82,52 @@ function App() {
       {error && <p className="error">{error}</p>}
 
       {result && (
-        <section className="result">
-          <h2>Suggested result</h2>
-          <p>
-            Score: <strong>{result.score} / {result.max_marks}</strong>
-          </p>
-          <p>Confidence: {result.confidence}%</p>
-          <p>Matched concepts: {result.matched_words.join(", ") || "None"}</p>
-          <p>Missing concepts: {result.missing_words.join(", ") || "None"}</p>
-        </section>
+      <section className="result">
+      <h2>AI suggested result</h2>
+
+      <p>
+        AI score: <strong>{result.score} / {result.max_marks}</strong>
+      </p>
+
+      <p>Confidence: {result.confidence}%</p>
+
+      <p>
+        Matched concepts: {result.matched_words.join(", ") || "None"}
+      </p>
+
+      <p>
+        Missing concepts: {result.missing_words.join(", ") || "None"}
+      </p>
+
+      <hr />
+
+      <h2>Teacher review</h2>
+
+      <label>
+        Final score
+        <input
+          type="number"
+          min="0"
+          max={result.max_marks}
+          step="0.1"
+          value={finalScore}
+          onChange={(event) => {
+            setFinalScore(event.target.value);
+            setApproved(false);
+          }}
+        />
+      </label>
+
+      <button type="button" onClick={() => setApproved(true)}>
+        Approve final score
+      </button>
+
+      {approved && (
+        <p className="approved">
+          Final score approved: <strong>{finalScore} / {result.max_marks}</strong>
+        </p>
+      )}
+    </section>
       )}
     </main>
   );

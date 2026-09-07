@@ -51,3 +51,8 @@ button {
 .error {
   color: #b91c1c;
 }
+
+.approved {
+  color: #166534;
+  font-weight: bold;
+}
