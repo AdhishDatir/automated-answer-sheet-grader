@@ -23,6 +23,7 @@ function App() {
   const [ocrFile, setOcrFile] = useState(null);
   const [ocrLoading, setOcrLoading] = useState(false);
   const [imagePreview, setImagePreview] = useState("");
+  const [storedImagePath, setStoredImagePath] = useState("");
 
   useEffect(() => {
   if (!ocrFile) {
@@ -99,6 +100,7 @@ function App() {
 
     // Sends OCR output into the editable Student Answer field.
     setStudentAnswer(data.extracted_text);
+    setStoredImagePath(data.image_path);
   } catch (err) {
     setError(err.message);
   } finally {
@@ -155,14 +157,15 @@ function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          student_name: studentName,
-          question_title: questionTitle,
-          model_answer: modelAnswer,
-          student_answer: studentAnswer,
-          rubric: rubricItems,
-          ai_score: Number(result.score),
-          final_score: Number(finalScore),
-          max_marks: Number(result.max_marks),
+        student_name: studentName,
+        question_title: questionTitle,
+        model_answer: modelAnswer,
+        student_answer: studentAnswer,
+        rubric: rubricItems,
+        image_path: storedImagePath,
+        ai_score: Number(result.score),
+        final_score: Number(finalScore),
+        max_marks: Number(result.max_marks),
         }),
       });
 
@@ -277,10 +280,10 @@ function App() {
             value={rubricText}
             onChange={(event) => setRubricText(event.target.value)}
             placeholder={`Uses sunlight | sunlight | 1
-Uses water | water | 1
-Uses carbon dioxide | carbon dioxide, carbon | 1
-Produces glucose or food | glucose, food | 1
-Releases oxygen | oxygen | 1`}
+                    Uses water | water | 1
+                    Uses carbon dioxide | carbon dioxide, carbon | 1
+                    Produces glucose or food | glucose, food | 1
+                    Releases oxygen | oxygen | 1`}
             required
           />
         </label>
@@ -365,6 +368,7 @@ Releases oxygen | oxygen | 1`}
                 <th>AI score</th>
                 <th>Final score</th>
                 <th>Maximum</th>
+                <th>Answer Sheet</th>
               </tr>
             </thead>
 
@@ -376,6 +380,19 @@ Releases oxygen | oxygen | 1`}
                   <td>{submission.ai_score}</td>
                   <td>{submission.final_score}</td>
                   <td>{submission.max_marks}</td>
+                  <td>
+                      {submission.image_path ? (
+                        <a
+                          href={`${API_BASE_URL}${submission.image_path}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          View scan
+                        </a>
+                      ) : (
+                        "No image"
+                      )}
+                    </td>
                 </tr>
               ))}
             </tbody>

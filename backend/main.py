@@ -3,6 +3,9 @@ import re
 import sqlite3
 import pytesseract
 
+from uuid import uuid4
+
+from fastapi.staticfiles import StaticFiles
 from datetime import datetime
 from pathlib import Path
 from io import BytesIO
@@ -13,6 +16,7 @@ from PIL import Image, ImageEnhance, ImageFilter, ImageOps, UnidentifiedImageErr
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
 
 app = FastAPI(title="Automated Answer Sheet Grader")
 
@@ -28,6 +32,11 @@ app.add_middleware(
 )
 
 DATABASE_FILE = Path(__file__).resolve().parent / "grader.db"
+
+UPLOAD_DIR = Path(__file__).resolve().parent / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
+
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 TESSERACT_PATH = Path(
     r"C:\Program Files\Tesseract-OCR\tesseract.exe"
@@ -58,6 +67,7 @@ class SubmissionRequest(BaseModel):
     ai_score: float
     final_score: float
     max_marks: float
+    image_path: str | None = None
 
 
 def get_connection():
@@ -76,6 +86,7 @@ def create_database():
             model_answer TEXT NOT NULL,
             student_answer TEXT NOT NULL,
             rubric_json TEXT NOT NULL,
+            image_path TEXT,
             ai_score REAL NOT NULL,
             final_score REAL NOT NULL,
             max_marks REAL NOT NULL,
@@ -108,7 +119,10 @@ def upgrade_database():
         cursor.execute(
             "ALTER TABLE submissions ADD COLUMN rubric_json TEXT NOT NULL DEFAULT '[]'"
         )
-
+    if "image_path" not in column_names:
+        cursor.execute(
+            "ALTER TABLE submissions ADD COLUMN image_path TEXT"
+        )
     connection.commit()
     connection.close()
 
@@ -139,31 +153,26 @@ async def extract_text_from_image(file: UploadFile = File(...)):
         file_bytes = await file.read()
         image = Image.open(BytesIO(file_bytes))
 
-        # Fixes images captured sideways from a phone camera.
+        # Save the original image with a unique name.
+        extension = Path(file.filename or "answer.jpg").suffix.lower()
+        stored_filename = f"{uuid4().hex}{extension}"
+        stored_image_path = UPLOAD_DIR / stored_filename
+        stored_image_path.write_bytes(file_bytes)
+
+        # Preprocess a copy for OCR.
         image = ImageOps.exif_transpose(image)
-
-        # Removes colour because OCR only needs text contrast.
         image = ImageOps.grayscale(image)
-
-        # Automatically expands light/dark contrast.
         image = ImageOps.autocontrast(image)
-
-        # Makes faint text darker and clearer.
         image = ImageEnhance.Contrast(image).enhance(2)
-
-        # Improves the edges of letters.
         image = image.filter(ImageFilter.SHARPEN)
 
-        # Enlarges small images so letter shapes are easier to read.
         if image.width < 1600:
             scale = 1600 / image.width
-            new_size = (
-                int(image.width * scale),
-                int(image.height * scale),
+            image = image.resize(
+                (int(image.width * scale), int(image.height * scale)),
+                Image.Resampling.LANCZOS,
             )
-            image = image.resize(new_size, Image.Resampling.LANCZOS)
 
-        # Converts grey pixels into clear black or white pixels.
         image = image.point(lambda pixel: 0 if pixel < 170 else 255)
 
         extracted_text = pytesseract.image_to_string(
@@ -175,6 +184,7 @@ async def extract_text_from_image(file: UploadFile = File(...)):
         return {
             "filename": file.filename,
             "extracted_text": extracted_text,
+            "image_path": f"/uploads/{stored_filename}",
         }
 
     except UnidentifiedImageError:
@@ -253,8 +263,8 @@ def save_submission(data: SubmissionRequest):
         """
         INSERT INTO submissions
         (student_name, question_title, model_answer, student_answer,
-         rubric_json, ai_score, final_score, max_marks, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        rubric_json, image_path, ai_score, final_score, max_marks, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             data.student_name,
@@ -262,6 +272,7 @@ def save_submission(data: SubmissionRequest):
             data.model_answer,
             data.student_answer,
             json.dumps(rubric_data),
+            data.image_path,        
             data.ai_score,
             data.final_score,
             data.max_marks,

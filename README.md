@@ -1,41 +1,53 @@
 # Automated Answer Sheet Grader 🎓
 
-An AI-powered web application designed to automatically evaluate student answer sheets, assign marks, and provide meaningful feedback.
+An AI-assisted web application that helps teachers evaluate short subjective answers. It extracts typed text from answer-sheet images, grades it against a teacher-defined rubric, and lets the teacher review and save the final score.
+
+> 👩‍🏫 **Teacher-in-control:** the system suggests a grade, but the teacher approves or overrides it.
 
 ## 🚀 Overview
 
-The **Automated Answer Sheet Grader** aims to reduce the time and effort required for manual answer-sheet evaluation.
-
-The system allows users to upload or submit student answers, processes the answers through the backend, evaluates them based on the expected answer or grading criteria, and displays the resulting marks and feedback.
+Manual answer-sheet evaluation takes time. This project provides a local workflow where a teacher uploads a typed answer-sheet image, checks the OCR result, applies a rubric, and stores the reviewed final score.
 
 ## ✨ Features
 
-- 📄 Upload and process answer sheets
-- 🤖 Automated answer evaluation
-- 📝 Automatic marks generation
-- 💬 Feedback for student answers
-- 🌐 Web-based user interface
-- ⚡ Fast API backend
-- 📊 Display grading results
-- 🔄 Frontend-backend API communication
+- 📄 Upload typed English answer-sheet images (`.png`, `.jpg`, or `.jpeg`)
+- 🖼️ Preview the original answer sheet beside editable OCR text
+- 🔎 Improve images before OCR with rotation correction, contrast, sharpening, resizing, and thresholding
+- 🔤 Extract text locally with Tesseract OCR
+- 📋 Create a custom rubric with key points and marks
+- 🤖 Generate an AI-suggested score with a point-by-point rubric breakdown
+- ✏️ Let teachers adjust and approve the final score
+- 💾 Save submissions, rubric data, scores, and image paths in SQLite
+- 📊 Load saved records and reopen original uploaded scans
+- 🔄 Connect React frontend and FastAPI backend through REST APIs
 
-## 🏗️ Project Structure
+## 🏗️ Application Architecture
 
 ```text
-Automated Answer Sheet Grader/
-│
-├── frontend/              # React + Vite frontend
-│   ├── public/
-│   ├── src/
-│   ├── package.json
-│   └── vite.config.js
-│
-├── backend/               # FastAPI backend
-│   ├── main.py
-│   └── requirements.txt
-│
-├── .gitignore
-└── README.md
+             Teacher
+                │
+                ▼
+        React Frontend
+        localhost:5173
+                │
+          HTTP / REST API
+                │
+                ▼
+         FastAPI Backend
+        127.0.0.1:8000
+                │
+     ┌──────────┼──────────┐
+     ▼          ▼          ▼
+ Image      OCR Engine   Rubric
+ Upload     Tesseract    Grader
+     │          │          │
+     └──────────┴──────────┘
+                │
+                ▼
+        SQLite Database
+                │
+                ▼
+   Final Score + Teacher Review
 ```
 
 ## 🛠️ Technologies Used
@@ -45,8 +57,7 @@ Automated Answer Sheet Grader/
 - React
 - Vite
 - JavaScript
-- HTML
-- CSS
+- HTML and CSS
 
 ### Backend
 
@@ -55,194 +66,158 @@ Automated Answer Sheet Grader/
 - Pydantic
 - Uvicorn
 
+### OCR, Database, and Image Processing
+
+- Tesseract OCR
+- pytesseract
+- Pillow
+- SQLite
+
 ### Development Tools
 
-- Git
-- GitHub
+- Git and GitHub
 - npm
+- Python virtual environments
+
+## 📁 Project Structure
+
+```text
+Automated Answer Sheet Grader/
+│
+├── frontend/                  # React + Vite frontend
+│   ├── src/
+│   │   ├── App.jsx            # Grading and teacher-review interface
+│   │   └── App.css            # Frontend styles
+│   ├── package.json
+│   └── vite.config.js
+│
+├── backend/                   # FastAPI backend
+│   ├── main.py                # OCR, grading, SQLite, and API logic
+│   ├── requirements.txt
+│   ├── grader.db              # Created automatically
+│   └── uploads/               # Uploaded answer-sheet images
+│
+├── .gitignore
+└── README.md
+```
 
 ## ⚙️ Installation
 
-### 1. Clone the repository
+### 1. Install prerequisites
 
-```bash
-git clone https://github.com/YOUR_USERNAME/automated-answer-sheet-grader.git
+Install Python 3.11+, Node.js LTS, and Tesseract OCR.
+
+On Windows, install Tesseract with:
+
+```powershell
+winget install -e --id UB-Mannheim.TesseractOCR
 ```
 
-Move into the project directory:
+Verify the installation:
 
-```bash
-cd automated-answer-sheet-grader
+```powershell
+& "C:\Program Files\Tesseract-OCR\tesseract.exe" --version
 ```
 
----
+### 2. Frontend setup 🎨
 
-## 🎨 Frontend Setup
-
-Go to the frontend directory:
-
-```bash
-cd frontend
-```
-
-Install dependencies:
-
-```bash
+```powershell
+cd "C:\Automated Answer Sheet Grader\frontend"
 npm install
-```
-
-Start the development server:
-
-```bash
 npm run dev
 ```
 
-The frontend will normally be available at:
+The frontend normally runs at:
 
 ```text
 http://localhost:5173
 ```
 
----
+### 3. Backend setup 🐍
 
-## 🐍 Backend Setup
+Open another terminal:
 
-Open another terminal and navigate to the backend:
-
-```bash
-cd backend
-```
-
-Create a virtual environment:
-
-```bash
-python -m venv venv
-```
-
-Activate it on Windows:
-
-```bash
-venv\Scripts\activate
-```
-
-Install the required packages:
-
-```bash
-pip install -r requirements.txt
-```
-
-Start the FastAPI server:
-
-```bash
+```powershell
+cd "C:\Automated Answer Sheet Grader\backend"
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install fastapi "uvicorn[standard]" pytesseract Pillow python-multipart
 python -m uvicorn main:app --reload
 ```
 
-The backend will normally run at:
+The backend normally runs at:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-FastAPI automatically provides interactive API documentation at:
+FastAPI interactive API documentation:
 
 ```text
 http://127.0.0.1:8000/docs
 ```
 
-## 🔄 Application Architecture
+## 📋 Rubric Format
+
+Enter one rubric item per line:
 
 ```text
-                User
-                  │
-                  ▼
-          React Frontend
-          localhost:5173
-                  │
-                  │ HTTP / REST API
-                  ▼
-           FastAPI Backend
-          127.0.0.1:8000
-                  │
-                  ▼
-        Answer Processing
-                  │
-                  ▼
-          Grading / AI Logic
-                  │
-                  ▼
-         Marks + Feedback
-                  │
-                  ▼
-          React Frontend
+Rubric point | matching keywords | marks
 ```
 
-## 📡 Example API
+Example: five-mark photosynthesis question
 
-Example endpoint:
-
-```http
-GET /
+```text
+Uses sunlight | sunlight | 1
+Uses water | water | 1
+Uses carbon dioxide | carbon dioxide, carbon | 1
+Produces glucose or food | glucose, food | 1
+Releases oxygen | oxygen | 1
 ```
 
-Example response:
+The current grader awards marks when matching keywords are found in the student answer. This makes the score easy to explain, though it does not yet understand all paraphrased answers.
 
-```json
-{
-  "message": "API is running"
-}
+## 📡 API Endpoints
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| `GET` | `/` | Check whether the backend is running |
+| `POST` | `/ocr` | Upload a typed image and extract text |
+| `POST` | `/grade` | Grade text against a rubric |
+| `POST` | `/submissions` | Save a teacher-reviewed submission |
+| `GET` | `/submissions` | Load saved submissions |
+| `GET` | `/uploads/{filename}` | Open an uploaded answer-sheet image |
+
+## 🔄 Current Workflow
+
+```text
+Upload typed answer-sheet image
+        ↓
+Image preprocessing + Tesseract OCR
+        ↓
+Teacher corrects OCR text if needed
+        ↓
+Rubric-based scoring
+        ↓
+Teacher approves or overrides score
+        ↓
+SQLite saves the complete record
 ```
 
-An answer evaluation endpoint can be implemented as:
+## ⚠️ Current Limitations
 
-```http
-POST /grade
-```
-
-Example request:
-
-```json
-{
-  "student_answer": "Photosynthesis is the process by which plants make food."
-}
-```
-
-Example response:
-
-```json
-{
-  "score": 8,
-  "feedback": "Good answer with the main concept correctly explained."
-}
-```
+- OCR is currently intended for typed English text.
+- Handwriting recognition is not included yet.
+- Keyword matching can miss correct answers written using different words.
+- Login and authentication are not included yet.
+- Uploaded scans are stored locally, so this version is for development and testing.
 
 ## 🔮 Future Improvements
 
-- OCR-based answer-sheet text extraction
-- AI-based semantic answer evaluation
-- PDF/image answer-sheet processing
-- Question and answer database
-- Teacher dashboard
-- Student performance analytics
-- Automatic report generation
-- Authentication and user accounts
-- Database integration
-- Improved grading accuracy
-
-## 🎯 Project Goal
-
-The primary goal of this project is to create a reliable and efficient system that can assist teachers and educational institutions by automating repetitive answer-sheet evaluation tasks while providing useful feedback to students.
-
-## 🤝 Contributing
-
-Contributions, suggestions, and improvements are welcome.
-
-1. Fork the repository
-2. Create a new branch
-3. Make your changes
-4. Commit your changes
-5. Push the branch
-6. Create a Pull Request
-
-## 📄 License
-
-This project is currently intended for educational and development purposes.
+1. ✂️ Question-wise answer segmentation
+2. 🧠 SBERT semantic similarity for paraphrased answers
+3. ✍️ Handwriting OCR with TrOCR
+4. 🔐 Teacher login and student records
+5. 📈 Class performance and question analytics
+6. 🐘 PostgreSQL for multi-user deployment
+7. ☁️ Deployment, tests, and project documentation
