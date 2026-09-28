@@ -20,6 +20,8 @@ function App() {
   const [loadingSubmissions, setLoadingSubmissions] = useState(false);
   const [error, setError] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
+  const [ocrFile, setOcrFile] = useState(null);
+  const [ocrLoading, setOcrLoading] = useState(false);
 
   function parseRubric() {
     const lines = rubricText
@@ -57,6 +59,39 @@ function App() {
       };
     });
   }
+
+  async function extractTextFromImage() {
+  if (!ocrFile) {
+    setError("Choose an answer-sheet image first.");
+    return;
+  }
+
+  setOcrLoading(true);
+  setError("");
+
+  const formData = new FormData();
+  formData.append("file", ocrFile);
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/ocr`, {
+      method: "POST",
+      body: formData,
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || "OCR could not extract text.");
+    }
+
+    // Sends OCR output into the editable Student Answer field.
+    setStudentAnswer(data.extracted_text);
+  } catch (err) {
+    setError(err.message);
+  } finally {
+    setOcrLoading(false);
+  }
+}
 
   async function gradeAnswer(event) {
     event.preventDefault();
@@ -185,7 +220,22 @@ function App() {
             required
           />
         </label>
+      <label>
+  Upload typed answer sheet image
+  <input
+    type="file"
+    accept="image/png,image/jpeg,image/jpg"
+    onChange={(event) => setOcrFile(event.target.files?.[0] || null)}
+  />
+</label>
 
+<button
+  type="button"
+  onClick={extractTextFromImage}
+  disabled={ocrLoading}
+>
+  {ocrLoading ? "Extracting text..." : "Extract text from image"}
+</button>
         <label>
           Student answer
           <textarea

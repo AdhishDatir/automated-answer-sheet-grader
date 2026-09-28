@@ -1,8 +1,14 @@
 import json
 import re
 import sqlite3
+import pytesseract
+
 from datetime import datetime
 from pathlib import Path
+from io import BytesIO
+
+from fastapi import File, UploadFile
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +28,13 @@ app.add_middleware(
 )
 
 DATABASE_FILE = Path(__file__).resolve().parent / "grader.db"
+
+TESSERACT_PATH = Path(
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+)
+
+if TESSERACT_PATH.exists():
+    pytesseract.pytesseract.tesseract_cmd = str(TESSERACT_PATH)
 
 
 class RubricItem(BaseModel):
@@ -114,6 +127,43 @@ def clean_text(text: str) -> str:
 def welcome():
     return {"message": "Answer Sheet Grader backend is running"}
 
+@app.post("/ocr")
+async def extract_text_from_image(file: UploadFile = File(...)):
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Upload an image file such as PNG, JPG, or JPEG.",
+        )
+
+    try:
+        file_bytes = await file.read()
+        image = Image.open(BytesIO(file_bytes))
+
+        # Converts the image to grayscale, which can help OCR.
+        image = ImageOps.grayscale(image)
+
+        # --psm 6 means: treat the image as one block of text.
+        extracted_text = pytesseract.image_to_string(
+            image,
+            lang="eng",
+            config="--psm 6",
+        ).strip()
+
+        return {
+            "filename": file.filename,
+            "extracted_text": extracted_text,
+        }
+
+    except UnidentifiedImageError:
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded file is not a readable image.",
+        )
+    except pytesseract.TesseractNotFoundError:
+        raise HTTPException(
+            status_code=500,
+            detail="Tesseract is not installed or its path is incorrect.",
+        )
 
 @app.post("/grade")
 def grade_answer(data: GradeRequest):
