@@ -1,33 +1,82 @@
 import { useState } from "react";
 import "./App.css";
 
+const API_BASE_URL = "http://127.0.0.1:8000";
+
 function App() {
-  const [modelAnswer, setModelAnswer] = useState("");
-  const [studentAnswer, setStudentAnswer] = useState("");
-  const [maxMarks, setMaxMarks] = useState(5);
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState("");
-  const [finalScore, setFinalScore] = useState("");
-  const [approved, setApproved] = useState(false);
-  const [saveMessage, setSaveMessage] = useState("");
-  const [submissions, setSubmissions] = useState([]);
-  const [loadingSubmissions, setLoadingSubmissions] = useState(false);
   const [studentName, setStudentName] = useState("");
   const [questionTitle, setQuestionTitle] = useState("");
+  const [modelAnswer, setModelAnswer] = useState("");
+  const [studentAnswer, setStudentAnswer] = useState("");
+  const [rubricText, setRubricText] = useState("");
+
+  const [result, setResult] = useState(null);
+  const [rubricItems, setRubricItems] = useState([]);
+  const [finalScore, setFinalScore] = useState("");
+  const [approved, setApproved] = useState(false);
+
+  const [submissions, setSubmissions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingSubmissions, setLoadingSubmissions] = useState(false);
+  const [error, setError] = useState("");
+  const [saveMessage, setSaveMessage] = useState("");
+
+  function parseRubric() {
+    const lines = rubricText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    if (lines.length === 0) {
+      throw new Error("Add at least one rubric point.");
+    }
+
+    return lines.map((line, index) => {
+      const parts = line.split("|").map((part) => part.trim());
+
+      if (parts.length !== 3) {
+        throw new Error(
+          `Rubric line ${index + 1} must use: Point | keywords | marks`
+        );
+      }
+
+      const [point, keywordsText, marksText] = parts;
+      const marks = Number(marksText);
+
+      if (!point || !keywordsText || !marks || marks <= 0) {
+        throw new Error(`Rubric line ${index + 1} is invalid.`);
+      }
+
+      return {
+        point,
+        keywords: keywordsText
+          .split(",")
+          .map((keyword) => keyword.trim())
+          .filter(Boolean),
+        marks,
+      };
+    });
+  }
 
   async function gradeAnswer(event) {
     event.preventDefault();
+
+    setLoading(true);
     setError("");
+    setSaveMessage("");
     setResult(null);
+    setApproved(false);
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/grade", {
+      const parsedRubric = parseRubric();
+
+      const response = await fetch(`${API_BASE_URL}/grade`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model_answer: modelAnswer,
           student_answer: studentAnswer,
-          max_marks: Number(maxMarks),
+          rubric: parsedRubric,
         }),
       });
 
@@ -37,78 +86,83 @@ function App() {
         throw new Error(data.detail || "Unable to grade the answer.");
       }
 
+      setRubricItems(parsedRubric);
       setResult(data);
       setFinalScore(data.score);
-      setApproved(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function approveScore() {
+    if (!result) return;
+
+    setSaveMessage("");
+    setError("");
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/submissions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          student_name: studentName,
+          question_title: questionTitle,
+          model_answer: modelAnswer,
+          student_answer: studentAnswer,
+          rubric: rubricItems,
+          ai_score: Number(result.score),
+          final_score: Number(finalScore),
+          max_marks: Number(result.max_marks),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Could not save the grade.");
+      }
+
+      setApproved(true);
+      setSaveMessage(`Saved successfully. Submission ID: ${data.submission_id}`);
+      loadSubmissions();
     } catch (err) {
       setError(err.message);
     }
   }
-  async function approveScore() {
-  if (!result) return;
 
-  setSaveMessage("");
-
-  try {
-    const response = await fetch("http://127.0.0.1:8000/submissions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        student_name: studentName,
-        question_title: questionTitle,
-        model_answer: modelAnswer,
-        student_answer: studentAnswer,
-        ai_score: Number(result.score),
-        final_score: Number(finalScore),
-        max_marks: Number(result.max_marks),
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.detail || "Could not save the grade.");
-    }
-
-    setApproved(true);
-    setSaveMessage(`Saved successfully. Submission ID: ${data.submission_id}`);
-    loadSubmissions();
-  } catch (error) {
-    setApproved(false);
-    setSaveMessage(error.message);
-  }
-}
   async function loadSubmissions() {
-  setLoadingSubmissions(true);
+    setLoadingSubmissions(true);
 
-  try {
-    const response = await fetch("http://127.0.0.1:8000/submissions");
+    try {
+      const response = await fetch(`${API_BASE_URL}/submissions`);
 
-    if (!response.ok) {
-      throw new Error("Could not load saved submissions.");
+      if (!response.ok) {
+        throw new Error("Could not load saved submissions.");
+      }
+
+      setSubmissions(await response.json());
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoadingSubmissions(false);
     }
-
-    const data = await response.json();
-    setSubmissions(data);
-  } catch (error) {
-    setSaveMessage(error.message);
-  } finally {
-    setLoadingSubmissions(false);
   }
-}
+
   return (
     <main>
       <h1>Automated Answer Sheet Grader</h1>
-      <p>Enter a model answer and a student answer to get a suggested score.</p>
+      <p>AI suggests marks using a teacher-defined rubric.</p>
 
       <form onSubmit={gradeAnswer}>
         <label>
           Student name
           <input
             value={studentName}
-          onChange={(event) => setStudentName(event.target.value)}
-          placeholder="Example: Adhi Kumar"
-          required
+            onChange={(event) => setStudentName(event.target.value)}
+            placeholder="Example: Adhi Kumar"
+            required
           />
         </label>
 
@@ -117,16 +171,17 @@ function App() {
           <input
             value={questionTitle}
             onChange={(event) => setQuestionTitle(event.target.value)}
-            placeholder="Example: What is the capital of France?"
+            placeholder="Example: Explain photosynthesis"
             required
           />
         </label>
-        <label> 
+
+        <label>
           Model answer
           <textarea
             value={modelAnswer}
             onChange={(event) => setModelAnswer(event.target.value)}
-            placeholder="Enter the teacher's expected answer"
+            placeholder="Teacher's reference answer"
             required
           />
         </label>
@@ -136,120 +191,124 @@ function App() {
           <textarea
             value={studentAnswer}
             onChange={(event) => setStudentAnswer(event.target.value)}
-            placeholder="Enter the student's answer"
+            placeholder="Student's answer"
             required
           />
         </label>
 
         <label>
-          Maximum marks
-          <input
-            type="number"
-            min="1"
-            value={maxMarks}
-            onChange={(event) => setMaxMarks(event.target.value)}
+          Rubric — one point per line
+          <textarea
+            value={rubricText}
+            onChange={(event) => setRubricText(event.target.value)}
+            placeholder={`Uses sunlight | sunlight | 1
+Uses water | water | 1
+Uses carbon dioxide | carbon dioxide, carbon | 1
+Produces glucose or food | glucose, food | 1
+Releases oxygen | oxygen | 1`}
+            required
           />
         </label>
 
-        <button type="submit">Grade answer</button>
+        <p>
+          Format: <code>Rubric point | matching keywords | marks</code>
+        </p>
+
+        <button type="submit" disabled={loading}>
+          {loading ? "Grading..." : "Grade answer"}
+        </button>
       </form>
 
       {error && <p className="error">{error}</p>}
 
       {result && (
-      <section className="result">
-      <h2>AI suggested result</h2>
+        <section className="result">
+          <h2>AI suggested result</h2>
+          <p>
+            Score: <strong>{result.score} / {result.max_marks}</strong>
+          </p>
+          <p>Rubric coverage: {result.confidence}%</p>
 
-      <p>
-        AI score: <strong>{result.score} / {result.max_marks}</strong>
-      </p>
+          <h3>Rubric breakdown</h3>
+          <ul>
+            {result.rubric_breakdown.map((item) => (
+              <li key={item.point}>
+                {item.point}: {item.awarded_marks} / {item.marks}
+                {item.matched
+                  ? ` — matched: ${item.matched_keywords.join(", ")}`
+                  : " — not found"}
+              </li>
+            ))}
+          </ul>
 
-      <p>Confidence: {result.confidence}%</p>
+          <hr />
 
-      <p>
-        Matched concepts: {result.matched_words.join(", ") || "None"}
-      </p>
+          <h2>Teacher review</h2>
 
-      <p>
-        Missing concepts: {result.missing_words.join(", ") || "None"}
-      </p>
+          <label>
+            Final score
+            <input
+              type="number"
+              min="0"
+              max={result.max_marks}
+              step="0.1"
+              value={finalScore}
+              onChange={(event) => {
+                setFinalScore(event.target.value);
+                setApproved(false);
+              }}
+            />
+          </label>
 
-      <hr />
+          <button type="button" onClick={approveScore}>
+            Approve and save final score
+          </button>
 
-      <h2>Teacher review</h2>
+          {approved && (
+            <p className="approved">
+              Approved: {finalScore} / {result.max_marks}
+            </p>
+          )}
 
-      <label>
-        Final score
-        <input
-          type="number"
-          min="0"
-          max={result.max_marks}
-          step="0.1"
-          value={finalScore}
-          onChange={(event) => {
-            setFinalScore(event.target.value);
-            setApproved(false);
-          }}
-        />
-      </label>
-
-      <button type="button" onClick={approveScore}>
-      Approve and save final score
-      </button>
-      {saveMessage && <p className="approved">{saveMessage}</p>}
-
-      {approved && (
-        <p className="approved">
-          Final score approved: <strong>{finalScore} / {result.max_marks}</strong>
-        </p>
+          {saveMessage && <p className="approved">{saveMessage}</p>}
+        </section>
       )}
-     
-    </section>
-      )}
+
       <section className="history">
-      <div className="history-header">
-    <h2>Saved Submissions</h2>
+        <h2>Saved submissions</h2>
 
-    <button type="button" onClick={loadSubmissions}>
-      {loadingSubmissions ? "Loading..." : "Load saved grades"}
-    </button>
-  </div>
+        <button type="button" onClick={loadSubmissions}>
+          {loadingSubmissions ? "Loading..." : "Load saved grades"}
+        </button>
 
-  {submissions.length === 0 ? (
-    <p>No saved grades loaded yet.</p>
-  ) : (
-    <div className="table-wrapper">
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>AI Score</th>
-            <th>Final Score</th>
-            <th>Maximum</th>
-            <th>Saved At</th>
-          </tr>
-        </thead>
+        {submissions.length > 0 && (
+          <table>
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Question</th>
+                <th>AI score</th>
+                <th>Final score</th>
+                <th>Maximum</th>
+              </tr>
+            </thead>
 
-        <tbody>
-          {submissions.map((submission) => (
-            <tr key={submission.id}>
-              <td>{submission.id}</td>
-              <td>{submission.ai_score}</td>
-              <td>{submission.final_score}</td>
-              <td>{submission.max_marks}</td>
-              <td>
-                {new Date(submission.created_at).toLocaleString()}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )}
-</section>
+            <tbody>
+              {submissions.map((submission) => (
+                <tr key={submission.id}>
+                  <td>{submission.student_name}</td>
+                  <td>{submission.question_title}</td>
+                  <td>{submission.ai_score}</td>
+                  <td>{submission.final_score}</td>
+                  <td>{submission.max_marks}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
     </main>
   );
-
 }
 
 export default App;

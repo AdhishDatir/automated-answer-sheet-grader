@@ -1,3 +1,4 @@
+import json
 import re
 import sqlite3
 from datetime import datetime
@@ -22,17 +23,17 @@ app.add_middleware(
 
 DATABASE_FILE = Path(__file__).resolve().parent / "grader.db"
 
-STOP_WORDS = {
-    "a", "an", "the", "and", "or", "is", "are", "was", "were",
-    "in", "on", "at", "to", "of", "for", "with", "by", "into",
-    "from", "that", "this", "it", "as"
-}
+
+class RubricItem(BaseModel):
+    point: str
+    keywords: list[str]
+    marks: float
 
 
 class GradeRequest(BaseModel):
     model_answer: str
     student_answer: str
-    max_marks: int = 5
+    rubric: list[RubricItem]
 
 
 class SubmissionRequest(BaseModel):
@@ -40,9 +41,11 @@ class SubmissionRequest(BaseModel):
     question_title: str
     model_answer: str
     student_answer: str
+    rubric: list[RubricItem]
     ai_score: float
     final_score: float
-    max_marks: int
+    max_marks: float
+
 
 def get_connection():
     return sqlite3.connect(DATABASE_FILE)
@@ -59,12 +62,39 @@ def create_database():
             question_title TEXT NOT NULL,
             model_answer TEXT NOT NULL,
             student_answer TEXT NOT NULL,
+            rubric_json TEXT NOT NULL,
             ai_score REAL NOT NULL,
             final_score REAL NOT NULL,
-            max_marks INTEGER NOT NULL,
+            max_marks REAL NOT NULL,
             created_at TEXT NOT NULL
         )
     """)
+
+    connection.commit()
+    connection.close()
+
+
+def upgrade_database():
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    columns = cursor.execute("PRAGMA table_info(submissions)").fetchall()
+    column_names = [column[1] for column in columns]
+
+    if "student_name" not in column_names:
+        cursor.execute(
+            "ALTER TABLE submissions ADD COLUMN student_name TEXT NOT NULL DEFAULT 'Unknown student'"
+        )
+
+    if "question_title" not in column_names:
+        cursor.execute(
+            "ALTER TABLE submissions ADD COLUMN question_title TEXT NOT NULL DEFAULT 'Untitled question'"
+        )
+
+    if "rubric_json" not in column_names:
+        cursor.execute(
+            "ALTER TABLE submissions ADD COLUMN rubric_json TEXT NOT NULL DEFAULT '[]'"
+        )
 
     connection.commit()
     connection.close()
@@ -76,9 +106,8 @@ def startup():
     upgrade_database()
 
 
-def important_words(text: str) -> set[str]:
-    words = re.findall(r"\b[a-zA-Z]+\b", text.lower())
-    return {word for word in words if word not in STOP_WORDS}
+def clean_text(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", text.lower())).strip()
 
 
 @app.get("/")
@@ -88,25 +117,42 @@ def welcome():
 
 @app.post("/grade")
 def grade_answer(data: GradeRequest):
-    model_words = important_words(data.model_answer)
-    student_words = important_words(data.student_answer)
+    if not data.rubric:
+        raise HTTPException(status_code=400, detail="Add at least one rubric point.")
 
-    if not model_words:
-        raise HTTPException(
-            status_code=400,
-            detail="Model answer needs meaningful words.",
-        )
+    student_text = clean_text(data.student_answer)
+    score = 0
+    total_marks = 0
+    breakdown = []
 
-    matched_words = model_words.intersection(student_words)
-    missing_words = model_words - student_words
-    similarity = len(matched_words) / len(model_words)
+    for item in data.rubric:
+        total_marks += item.marks
+
+        matched_keywords = [
+            keyword
+            for keyword in item.keywords
+            if clean_text(keyword) in student_text
+        ]
+
+        matched = len(matched_keywords) > 0
+        awarded_marks = item.marks if matched else 0
+        score += awarded_marks
+
+        breakdown.append({
+            "point": item.point,
+            "marks": item.marks,
+            "awarded_marks": awarded_marks,
+            "matched": matched,
+            "matched_keywords": matched_keywords,
+        })
+
+    confidence = round((score / total_marks) * 100, 1) if total_marks else 0
 
     return {
-        "score": round(similarity * data.max_marks, 1),
-        "max_marks": data.max_marks,
-        "confidence": round(similarity * 100, 1),
-        "matched_words": sorted(matched_words),
-        "missing_words": sorted(missing_words),
+        "score": round(score, 1),
+        "max_marks": round(total_marks, 1),
+        "confidence": confidence,
+        "rubric_breakdown": breakdown,
     }
 
 
@@ -118,6 +164,15 @@ def save_submission(data: SubmissionRequest):
             detail="Final score must be between 0 and maximum marks.",
         )
 
+    rubric_data = [
+        {
+            "point": item.point,
+            "keywords": item.keywords,
+            "marks": item.marks,
+        }
+        for item in data.rubric
+    ]
+
     connection = get_connection()
     cursor = connection.cursor()
 
@@ -125,14 +180,15 @@ def save_submission(data: SubmissionRequest):
         """
         INSERT INTO submissions
         (student_name, question_title, model_answer, student_answer,
-        ai_score, final_score, max_marks, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         rubric_json, ai_score, final_score, max_marks, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             data.student_name,
             data.question_title,
             data.model_answer,
             data.student_answer,
+            json.dumps(rubric_data),
             data.ai_score,
             data.final_score,
             data.max_marks,
@@ -161,24 +217,12 @@ def get_submissions():
     ).fetchall()
 
     connection.close()
-    return [dict(row) for row in rows]
 
-def upgrade_database():
-    connection = get_connection()
-    cursor = connection.cursor()
+    submissions = []
 
-    columns = cursor.execute("PRAGMA table_info(submissions)").fetchall()
-    column_names = [column[1] for column in columns]
+    for row in rows:
+        submission = dict(row)
+        submission["rubric"] = json.loads(submission.pop("rubric_json", "[]"))
+        submissions.append(submission)
 
-    if "student_name" not in column_names:
-        cursor.execute(
-            "ALTER TABLE submissions ADD COLUMN student_name TEXT NOT NULL DEFAULT 'Unknown student'"
-        )
-
-    if "question_title" not in column_names:
-        cursor.execute(
-            "ALTER TABLE submissions ADD COLUMN question_title TEXT NOT NULL DEFAULT 'Untitled question'"
-        )
-
-    connection.commit()
-    connection.close()
+    return submissions
