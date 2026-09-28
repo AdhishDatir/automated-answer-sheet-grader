@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
 
 const API_BASE_URL = "http://127.0.0.1:8000";
@@ -22,6 +22,19 @@ function App() {
   const [saveMessage, setSaveMessage] = useState("");
   const [ocrFile, setOcrFile] = useState(null);
   const [ocrLoading, setOcrLoading] = useState(false);
+  const [imagePreview, setImagePreview] = useState("");
+
+  useEffect(() => {
+  if (!ocrFile) {
+    setImagePreview("");
+    return;
+  }
+
+  const previewUrl = URL.createObjectURL(ocrFile);
+  setImagePreview(previewUrl);
+
+  return () => URL.revokeObjectURL(previewUrl);
+  }, [ocrFile]);
 
   function parseRubric() {
     const lines = rubricText
@@ -236,15 +249,27 @@ function App() {
 >
   {ocrLoading ? "Extracting text..." : "Extract text from image"}
 </button>
-        <label>
-          Student answer
-          <textarea
-            value={studentAnswer}
-            onChange={(event) => setStudentAnswer(event.target.value)}
-            placeholder="Student's answer"
-            required
-          />
-        </label>
+        <div className="ocr-review-grid">
+  <div className="image-preview">
+    <h3>Uploaded answer sheet</h3>
+
+    {imagePreview ? (
+      <img src={imagePreview} alt="Uploaded answer sheet preview" />
+    ) : (
+      <p>Select an image to see its preview.</p>
+    )}
+  </div>
+
+  <label>
+    Student answer — editable OCR text
+    <textarea
+      value={studentAnswer}
+      onChange={(event) => setStudentAnswer(event.target.value)}
+      placeholder="OCR text will appear here after extraction"
+      required
+    />
+  </label>
+</div>
 
         <label>
           Rubric — one point per line

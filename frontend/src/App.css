@@ -92,3 +92,35 @@ td {
 th {
   background: #e2e8f0;
 }
+.ocr-review-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.image-preview {
+  padding: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.image-preview h3 {
+  margin-top: 0;
+}
+
+.image-preview img {
+  display: block;
+  width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: white;
+}
+
+@media (max-width: 700px) {
+  .ocr-review-grid {
+    grid-template-columns: 1fr;
+  }
+}
