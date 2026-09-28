@@ -8,7 +8,7 @@ from pathlib import Path
 from io import BytesIO
 
 from fastapi import File, UploadFile
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps, UnidentifiedImageError
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -139,10 +139,33 @@ async def extract_text_from_image(file: UploadFile = File(...)):
         file_bytes = await file.read()
         image = Image.open(BytesIO(file_bytes))
 
-        # Converts the image to grayscale, which can help OCR.
+        # Fixes images captured sideways from a phone camera.
+        image = ImageOps.exif_transpose(image)
+
+        # Removes colour because OCR only needs text contrast.
         image = ImageOps.grayscale(image)
 
-        # --psm 6 means: treat the image as one block of text.
+        # Automatically expands light/dark contrast.
+        image = ImageOps.autocontrast(image)
+
+        # Makes faint text darker and clearer.
+        image = ImageEnhance.Contrast(image).enhance(2)
+
+        # Improves the edges of letters.
+        image = image.filter(ImageFilter.SHARPEN)
+
+        # Enlarges small images so letter shapes are easier to read.
+        if image.width < 1600:
+            scale = 1600 / image.width
+            new_size = (
+                int(image.width * scale),
+                int(image.height * scale),
+            )
+            image = image.resize(new_size, Image.Resampling.LANCZOS)
+
+        # Converts grey pixels into clear black or white pixels.
+        image = image.point(lambda pixel: 0 if pixel < 170 else 255)
+
         extracted_text = pytesseract.image_to_string(
             image,
             lang="eng",
