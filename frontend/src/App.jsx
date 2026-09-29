@@ -306,6 +306,12 @@ function App() {
             Score: <strong>{result.score} / {result.max_marks}</strong>
           </p>
           <p>Rubric coverage: {result.confidence}%</p>
+          {result.needs_review && (
+            <div className="review-warning">
+              <strong>⚠️ Teacher review required</strong>
+              <p>{result.review_reason}</p>
+            </div>
+          )}
 
           <h3>Rubric breakdown</h3>
           <ul>

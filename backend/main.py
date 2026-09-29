@@ -32,6 +32,7 @@ app.add_middleware(
 )
 
 DATABASE_FILE = Path(__file__).resolve().parent / "grader.db"
+LOW_CONFIDENCE_THRESHOLD = 60
 
 UPLOAD_DIR = Path(__file__).resolve().parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -232,11 +233,17 @@ def grade_answer(data: GradeRequest):
     confidence = round((score / total_marks) * 100, 1) if total_marks else 0
 
     return {
-        "score": round(score, 1),
-        "max_marks": round(total_marks, 1),
-        "confidence": confidence,
-        "rubric_breakdown": breakdown,
-    }
+    "score": round(score, 1),
+    "max_marks": round(total_marks, 1),
+    "confidence": confidence,
+    "needs_review": confidence < LOW_CONFIDENCE_THRESHOLD,
+    "review_reason": (
+        "Low rubric coverage. Teacher review is required."
+        if confidence < LOW_CONFIDENCE_THRESHOLD
+        else "Rubric coverage is acceptable."
+    ),
+    "rubric_breakdown": breakdown,
+}
 
 
 @app.post("/submissions")
