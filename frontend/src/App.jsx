@@ -201,6 +201,67 @@ function App() {
     }
   }
 
+
+  async function updateFinalScore(submission) {
+  const newScore = window.prompt(
+    `Enter the new final score. Maximum: ${submission.max_marks}`,
+    submission.final_score
+  );
+
+  if (newScore === null) return;
+
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/submissions/${submission.id}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          final_score: Number(newScore),
+        }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || "Could not update the score.");
+    }
+
+    setSaveMessage(data.message);
+    loadSubmissions();
+  } catch (err) {
+    setError(err.message);
+  }
+}
+
+
+async function deleteSubmission(submissionId) {
+  const confirmed = window.confirm(
+    "Delete this saved grade? This cannot be undone."
+  );
+
+  if (!confirmed) return;
+
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/submissions/${submissionId}`,
+      { method: "DELETE" }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || "Could not delete the submission.");
+    }
+
+    setSaveMessage(data.message);
+    loadSubmissions();
+  } catch (err) {
+    setError(err.message);
+  }
+}
+
   return (
     <main>
       <h1>Automated Answer Sheet Grader</h1>
@@ -375,6 +436,7 @@ function App() {
                 <th>Final score</th>
                 <th>Maximum</th>
                 <th>Answer Sheet</th>
+                
               </tr>
             </thead>
 
@@ -398,6 +460,22 @@ function App() {
                       ) : (
                         "No image"
                       )}
+                    </td>
+                    <td>
+                          <button
+                            type="button"
+                            onClick={() => updateFinalScore(submission)}
+                          >
+                            Edit score
+                          </button>
+
+                          <button
+                            type="button"
+                            className="delete-button"
+                            onClick={() => deleteSubmission(submission.id)}
+                          >
+                            Delete
+                          </button>
                     </td>
                 </tr>
               ))}

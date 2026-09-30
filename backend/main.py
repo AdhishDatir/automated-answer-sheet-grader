@@ -70,6 +70,12 @@ class SubmissionRequest(BaseModel):
     max_marks: float
     image_path: str | None = None
 
+class SubmissionUpdateRequest(BaseModel):
+    student_name: str | None = None
+    question_title: str | None = None
+    student_answer: str | None = None
+    final_score: float | None = None
+
 
 def get_connection():
     return sqlite3.connect(DATABASE_FILE)
@@ -317,3 +323,88 @@ def get_submissions():
         submissions.append(submission)
 
     return submissions
+
+
+@app.put("/submissions/{submission_id}")
+def update_submission(
+    submission_id: int,
+    data: SubmissionUpdateRequest,
+):
+    connection = get_connection()
+    connection.row_factory = sqlite3.Row
+    cursor = connection.cursor()
+
+    submission = cursor.execute(
+        "SELECT * FROM submissions WHERE id = ?",
+        (submission_id,),
+    ).fetchone()
+
+    if not submission:
+        connection.close()
+        raise HTTPException(
+            status_code=404,
+            detail="Submission not found.",
+        )
+
+    if (
+        data.final_score is not None
+        and (data.final_score < 0 or data.final_score > submission["max_marks"])
+    ):
+        connection.close()
+        raise HTTPException(
+            status_code=400,
+            detail="Final score must be between 0 and maximum marks.",
+        )
+
+    updates = {}
+    if data.student_name is not None:
+        updates["student_name"] = data.student_name
+    if data.question_title is not None:
+        updates["question_title"] = data.question_title
+    if data.student_answer is not None:
+        updates["student_answer"] = data.student_answer
+    if data.final_score is not None:
+        updates["final_score"] = data.final_score
+
+    if not updates:
+        connection.close()
+        raise HTTPException(
+            status_code=400,
+            detail="Provide at least one field to update.",
+        )
+
+    assignments = ", ".join(f"{column} = ?" for column in updates)
+    values = list(updates.values()) + [submission_id]
+
+    cursor.execute(
+        f"UPDATE submissions SET {assignments} WHERE id = ?",
+        values,
+    )
+
+    connection.commit()
+    connection.close()
+
+    return {"message": "Submission updated successfully."}
+
+
+@app.delete("/submissions/{submission_id}")
+def delete_submission(submission_id: int):
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        "DELETE FROM submissions WHERE id = ?",
+        (submission_id,),
+    )
+
+    if cursor.rowcount == 0:
+        connection.close()
+        raise HTTPException(
+            status_code=404,
+            detail="Submission not found.",
+        )
+
+    connection.commit()
+    connection.close()
+
+    return {"message": "Submission deleted successfully."}

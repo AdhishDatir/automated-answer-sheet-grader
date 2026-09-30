@@ -137,3 +137,8 @@ th {
 .review-warning p {
   margin: 6px 0 0;
 }
+
+.delete-button {
+  margin-left: 8px;
+  background: #b91c1c;
+}
