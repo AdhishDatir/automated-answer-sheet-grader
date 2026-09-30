@@ -33,6 +33,10 @@ app.add_middleware(
 
 DATABASE_FILE = Path(__file__).resolve().parent / "grader.db"
 LOW_CONFIDENCE_THRESHOLD = 60
+SEMANTIC_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+SEMANTIC_MATCH_THRESHOLD = 0.60
+
+semantic_model = None
 
 UPLOAD_DIR = Path(__file__).resolve().parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -50,6 +54,7 @@ if TESSERACT_PATH.exists():
 class RubricItem(BaseModel):
     point: str
     keywords: list[str]
+    semantic_reference: str
     marks: float
 
 
@@ -215,26 +220,45 @@ def grade_answer(data: GradeRequest):
     total_marks = 0
     breakdown = []
 
-    for item in data.rubric:
+    semantic_scores = calculate_semantic_similarities(
+    data.student_answer,
+    [item.semantic_reference for item in data.rubric],
+)
+
+    for item, semantic_score in zip(data.rubric, semantic_scores):
         total_marks += item.marks
 
-        matched_keywords = [
-            keyword
-            for keyword in item.keywords
-            if clean_text(keyword) in student_text
-        ]
+    matched_keywords = [
+        keyword
+        for keyword in item.keywords
+        if clean_text(keyword) in student_text
+    ]
 
-        matched = len(matched_keywords) > 0
-        awarded_marks = item.marks if matched else 0
-        score += awarded_marks
+    keyword_matched = len(matched_keywords) > 0
+    semantic_matched = semantic_score >= SEMANTIC_MATCH_THRESHOLD
 
-        breakdown.append({
-            "point": item.point,
-            "marks": item.marks,
-            "awarded_marks": awarded_marks,
-            "matched": matched,
-            "matched_keywords": matched_keywords,
-        })
+    matched = keyword_matched or semantic_matched
+    awarded_marks = item.marks if matched else 0
+    score += awarded_marks
+
+    if keyword_matched and semantic_matched:
+        match_method = "Keyword and semantic match"
+    elif keyword_matched:
+        match_method = "Keyword match"
+    elif semantic_matched:
+        match_method = "Semantic match"
+    else:
+        match_method = "No match"
+
+    breakdown.append({
+        "point": item.point,
+        "marks": item.marks,
+        "awarded_marks": awarded_marks,
+        "matched": matched,
+        "matched_keywords": matched_keywords,
+        "semantic_similarity": round(semantic_score * 100, 1),
+        "match_method": match_method,
+    })
 
     confidence = round((score / total_marks) * 100, 1) if total_marks else 0
 
@@ -261,13 +285,14 @@ def save_submission(data: SubmissionRequest):
         )
 
     rubric_data = [
-        {
-            "point": item.point,
-            "keywords": item.keywords,
-            "marks": item.marks,
-        }
-        for item in data.rubric
-    ]
+    {
+        "point": item.point,
+        "keywords": item.keywords,
+        "semantic_reference": item.semantic_reference,
+        "marks": item.marks,
+    }
+    for item in data.rubric
+]
 
     connection = get_connection()
     cursor = connection.cursor()
@@ -408,3 +433,43 @@ def delete_submission(submission_id: int):
     connection.close()
 
     return {"message": "Submission deleted successfully."}
+
+
+
+def get_semantic_model():
+    global semantic_model
+
+    if semantic_model is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            semantic_model = SentenceTransformer(SEMANTIC_MODEL_NAME)
+        except ImportError:
+            raise HTTPException(
+                status_code=500,
+                detail="sentence-transformers is not installed.",
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=500,
+                detail="Could not load the SBERT model. Check your internet connection.",
+            )
+
+    return semantic_model
+
+
+def calculate_semantic_similarities(student_answer, references):
+    model = get_semantic_model()
+
+    embeddings = model.encode(
+        [student_answer, *references],
+        normalize_embeddings=True,
+    )
+
+    student_embedding = embeddings[0]
+    reference_embeddings = embeddings[1:]
+
+    return [
+        float(student_embedding @ reference_embedding)
+        for reference_embedding in reference_embeddings
+    ]

@@ -50,13 +50,13 @@ function App() {
     return lines.map((line, index) => {
       const parts = line.split("|").map((part) => part.trim());
 
-      if (parts.length !== 3) {
+      if (parts.length !== 4) {
         throw new Error(
           `Rubric line ${index + 1} must use: Point | keywords | marks`
         );
       }
 
-      const [point, keywordsText, marksText] = parts;
+     const [point, keywordsText, semanticReference, marksText] = parts;
       const marks = Number(marksText);
 
       if (!point || !keywordsText || !marks || marks <= 0) {
@@ -64,12 +64,13 @@ function App() {
       }
 
       return {
-        point,
-        keywords: keywordsText
-          .split(",")
-          .map((keyword) => keyword.trim())
-          .filter(Boolean),
-        marks,
+          point,
+          keywords: keywordsText
+            .split(",")
+            .map((keyword) => keyword.trim())
+            .filter(Boolean),
+          semantic_reference: semanticReference,
+          marks,
       };
     });
   }
@@ -297,60 +298,60 @@ async function deleteSubmission(submissionId) {
             required
           />
         </label>
-      <label>
-  Upload typed answer sheet image
-  <input
-    type="file"
-    accept="image/png,image/jpeg,image/jpg"
-    onChange={(event) => setOcrFile(event.target.files?.[0] || null)}
-  />
-</label>
+        <label>
+          Upload typed answer sheet image
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/jpg"
+            onChange={(event) => setOcrFile(event.target.files?.[0] || null)}
+          />
+        </label>
 
-<button
-  type="button"
-  onClick={extractTextFromImage}
-  disabled={ocrLoading}
->
-  {ocrLoading ? "Extracting text..." : "Extract text from image"}
-</button>
-        <div className="ocr-review-grid">
-  <div className="image-preview">
-    <h3>Uploaded answer sheet</h3>
+        <button
+          type="button"
+          onClick={extractTextFromImage}
+          disabled={ocrLoading}
+        >
+          {ocrLoading ? "Extracting text..." : "Extract text from image"}
+        </button>
+                <div className="ocr-review-grid">
+          <div className="image-preview">
+            <h3>Uploaded answer sheet</h3>
 
-    {imagePreview ? (
-      <img src={imagePreview} alt="Uploaded answer sheet preview" />
-    ) : (
-      <p>Select an image to see its preview.</p>
-    )}
-  </div>
+            {imagePreview ? (
+              <img src={imagePreview} alt="Uploaded answer sheet preview" />
+            ) : (
+              <p>Select an image to see its preview.</p>
+            )}
+          </div>
 
-  <label>
-    Student answer — editable OCR text
-    <textarea
-      value={studentAnswer}
-      onChange={(event) => setStudentAnswer(event.target.value)}
-      placeholder="OCR text will appear here after extraction"
-      required
-    />
-  </label>
-</div>
+        <label>
+          Student answer — editable OCR text
+          <textarea
+            value={studentAnswer}
+            onChange={(event) => setStudentAnswer(event.target.value)}
+            placeholder="OCR text will appear here after extraction"
+            required
+          />
+        </label>
+      </div>
 
         <label>
           Rubric — one point per line
           <textarea
             value={rubricText}
             onChange={(event) => setRubricText(event.target.value)}
-            placeholder={`Uses sunlight | sunlight | 1
-                    Uses water | water | 1
-                    Uses carbon dioxide | carbon dioxide, carbon | 1
-                    Produces glucose or food | glucose, food | 1
-                    Releases oxygen | oxygen | 1`}
+            placeholder={`Uses sunlight | sunlight | Plants use sunlight for photosynthesis. | 1
+                  Uses water | water | Plants need water during photosynthesis. | 1
+                  Uses carbon dioxide | carbon dioxide, carbon | Plants use carbon dioxide from air. | 1
+                  Produces glucose or food | glucose, food | Plants make glucose or food. | 1
+                  Releases oxygen | oxygen | Oxygen is released during photosynthesis. | 1`}
             required
           />
         </label>
 
         <p>
-          Format: <code>Rubric point | matching keywords | marks</code>
+          Format: <code>Rubric point |keywords |expected meaning | marks</code>
         </p>
 
         <button type="submit" disabled={loading}>
@@ -378,10 +379,11 @@ async function deleteSubmission(submissionId) {
           <ul>
             {result.rubric_breakdown.map((item) => (
               <li key={item.point}>
-                {item.point}: {item.awarded_marks} / {item.marks}
-                {item.matched
-                  ? ` — matched: ${item.matched_keywords.join(", ")}`
-                  : " — not found"}
+                <strong>{item.point}</strong>: {item.awarded_marks} / {item.marks}
+                <br />
+                Method: {item.match_method}
+                <br />
+                Semantic similarity: {item.semantic_similarity}%
               </li>
             ))}
           </ul>
