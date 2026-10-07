@@ -535,22 +535,22 @@ async function loadAnalytics() {
             {analytics && (
               <div className="analytics-grid">
                 <div className="metric">
-                  <span>Total submissions - </span>
+                  <span>Total submissions</span>
                   <strong>{analytics.total_submissions}</strong>
                 </div>
 
                 <div className="metric">
-                  <span>Mean Absolute Error - </span>
+                  <span>Mean Absolute Error</span>
                   <strong>{analytics.mean_absolute_error}</strong>
                 </div>
 
                 <div className="metric">
-                  <span>Exact score agreement - </span>
+                  <span>Exact score agreement</span>
                   <strong>{analytics.exact_score_agreement}%</strong>
                 </div>
 
                 <div className="metric">
-                  <span>Teacher-review flags - </span>
+                  <span>Teacher-review flags</span>
                   <strong>{analytics.review_flag_rate}%</strong>
                 </div>
               </div>
