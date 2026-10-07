@@ -24,6 +24,8 @@ function App() {
   const [ocrLoading, setOcrLoading] = useState(false);
   const [imagePreview, setImagePreview] = useState("");
   const [storedImagePath, setStoredImagePath] = useState("");
+  const [analytics, setAnalytics] = useState(null);
+  const [loadingAnalytics, setLoadingAnalytics] = useState(false);
 
   useEffect(() => {
   if (!ocrFile) {
@@ -186,6 +188,7 @@ function App() {
       setApproved(true);
       setSaveMessage(`Saved successfully. Submission ID: ${data.submission_id}`);
       loadSubmissions();
+      loadAnalytics();
     } catch (err) {
       setError(err.message);
     }
@@ -267,6 +270,30 @@ async function deleteSubmission(submissionId) {
     loadSubmissions();
   } catch (err) {
     setError(err.message);
+  }
+}
+
+
+async function loadAnalytics() {
+  setLoadingAnalytics(true);
+  setError("");
+
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/analytics/evaluation`
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error("Could not load evaluation analytics.");
+    }
+
+    setAnalytics(data);
+  } catch (err) {
+    setError(err.message);
+  } finally {
+    setLoadingAnalytics(false);
   }
 }
 
@@ -430,6 +457,7 @@ async function deleteSubmission(submissionId) {
           {saveMessage && <p className="approved">{saveMessage}</p>}
         </section>
       )}
+      
 
       <section className="history">
         <h2>Saved submissions</h2>
@@ -496,6 +524,38 @@ async function deleteSubmission(submissionId) {
           </table>
         )}
       </section>
+      
+      <section className="analytics">
+            <h2>Evaluation Analytics</h2>
+
+            <button type="button" onClick={loadAnalytics}>
+              {loadingAnalytics ? "Loading..." : "Load analytics"}
+            </button>
+
+            {analytics && (
+              <div className="analytics-grid">
+                <div className="metric">
+                  <span>Total submissions - </span>
+                  <strong>{analytics.total_submissions}</strong>
+                </div>
+
+                <div className="metric">
+                  <span>Mean Absolute Error - </span>
+                  <strong>{analytics.mean_absolute_error}</strong>
+                </div>
+
+                <div className="metric">
+                  <span>Exact score agreement - </span>
+                  <strong>{analytics.exact_score_agreement}%</strong>
+                </div>
+
+                <div className="metric">
+                  <span>Teacher-review flags - </span>
+                  <strong>{analytics.review_flag_rate}%</strong>
+                </div>
+              </div>
+            )}
+          </section>
     </main>
   );
 }
