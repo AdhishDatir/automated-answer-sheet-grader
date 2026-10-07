@@ -37,7 +37,7 @@ app.add_middleware(
 DATABASE_FILE = Path(__file__).resolve().parent / "grader.db"
 LOW_CONFIDENCE_THRESHOLD = 60
 SEMANTIC_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-SEMANTIC_MATCH_THRESHOLD = 0.60
+SEMANTIC_MATCH_THRESHOLD = 0.75
 
 semantic_model = None
 
@@ -77,6 +77,7 @@ class SubmissionRequest(BaseModel):
     final_score: float
     max_marks: float
     image_path: str | None = None
+    needs_review: bool = False
 
 class SubmissionUpdateRequest(BaseModel):
     student_name: str | None = None
@@ -105,6 +106,7 @@ def create_database():
             ai_score REAL NOT NULL,
             final_score REAL NOT NULL,
             max_marks REAL NOT NULL,
+            needs_review INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         )
     """)
@@ -137,6 +139,10 @@ def upgrade_database():
     if "image_path" not in column_names:
         cursor.execute(
             "ALTER TABLE submissions ADD COLUMN image_path TEXT"
+        )
+    if "needs_review" not in column_names:
+        cursor.execute(
+        "ALTER TABLE submissions ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0"
         )
     connection.commit()
     connection.close()
@@ -231,37 +237,37 @@ def grade_answer(data: GradeRequest):
     for item, semantic_score in zip(data.rubric, semantic_scores):
         total_marks += item.marks
 
-    matched_keywords = [
-        keyword
-        for keyword in item.keywords
-        if clean_text(keyword) in student_text
-    ]
+        matched_keywords = [
+            keyword
+            for keyword in item.keywords
+            if clean_text(keyword) in student_text
+        ]
 
-    keyword_matched = len(matched_keywords) > 0
-    semantic_matched = semantic_score >= SEMANTIC_MATCH_THRESHOLD
+        keyword_matched = len(matched_keywords) > 0
+        semantic_matched = semantic_score >= SEMANTIC_MATCH_THRESHOLD
 
-    matched = keyword_matched or semantic_matched
-    awarded_marks = item.marks if matched else 0
-    score += awarded_marks
+        matched = keyword_matched or semantic_matched
+        awarded_marks = item.marks if matched else 0
+        score += awarded_marks
 
-    if keyword_matched and semantic_matched:
-        match_method = "Keyword and semantic match"
-    elif keyword_matched:
-        match_method = "Keyword match"
-    elif semantic_matched:
-        match_method = "Semantic match"
-    else:
-        match_method = "No match"
+        if keyword_matched and semantic_matched:
+            match_method = "Keyword and semantic match"
+        elif keyword_matched:
+            match_method = "Keyword match"
+        elif semantic_matched:
+            match_method = "Semantic match"
+        else:
+            match_method = "No match"
 
-    breakdown.append({
-        "point": item.point,
-        "marks": item.marks,
-        "awarded_marks": awarded_marks,
-        "matched": matched,
-        "matched_keywords": matched_keywords,
-        "semantic_similarity": round(semantic_score * 100, 1),
-        "match_method": match_method,
-    })
+        breakdown.append({
+            "point": item.point,
+            "marks": item.marks,
+            "awarded_marks": awarded_marks,
+            "matched": matched,
+            "matched_keywords": matched_keywords,
+            "semantic_similarity": round(semantic_score * 100, 1),
+            "match_method": match_method,
+        })
 
     confidence = round((score / total_marks) * 100, 1) if total_marks else 0
 
@@ -301,25 +307,37 @@ def save_submission(data: SubmissionRequest):
     cursor = connection.cursor()
 
     cursor.execute(
-        """
-        INSERT INTO submissions
-        (student_name, question_title, model_answer, student_answer,
-        rubric_json, image_path, ai_score, final_score, max_marks, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            data.student_name,
-            data.question_title,
-            data.model_answer,
-            data.student_answer,
-            json.dumps(rubric_data),
-            data.image_path,        
-            data.ai_score,
-            data.final_score,
-            data.max_marks,
-            datetime.now().isoformat(timespec="seconds"),
-        ),
+    """
+    INSERT INTO submissions
+    (
+        student_name,
+        question_title,
+        model_answer,
+        student_answer,
+        rubric_json,
+        image_path,
+        ai_score,
+        final_score,
+        max_marks,
+        needs_review,
+        created_at
     )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+    (
+        data.student_name,
+        data.question_title,
+        data.model_answer,
+        data.student_answer,
+        json.dumps(rubric_data),
+        data.image_path,
+        data.ai_score,
+        data.final_score,
+        data.max_marks,
+        int(data.needs_review),
+        datetime.now().isoformat(timespec="seconds"),
+    ),
+)
 
     submission_id = cursor.lastrowid
     connection.commit()
@@ -476,3 +494,56 @@ def calculate_semantic_similarities(student_answer, references):
         float(student_embedding @ reference_embedding)
         for reference_embedding in reference_embeddings
     ]
+
+
+@app.get("/analytics/evaluation")
+def get_evaluation_metrics():
+    connection = get_connection()
+    connection.row_factory = sqlite3.Row
+    cursor = connection.cursor()
+
+    rows = cursor.execute("""
+        SELECT ai_score, final_score, needs_review
+        FROM submissions
+    """).fetchall()
+
+    connection.close()
+
+    if not rows:
+        return {
+            "total_submissions": 0,
+            "mean_absolute_error": 0,
+            "exact_score_agreement": 0,
+            "review_flag_rate": 0,
+        }
+
+    absolute_errors = [
+        abs(row["ai_score"] - row["final_score"])
+        for row in rows
+    ]
+
+    exact_matches = [
+        row for row in rows
+        if abs(row["ai_score"] - row["final_score"]) < 0.01
+    ]
+
+    review_flags = [
+        row for row in rows
+        if row["needs_review"] == 1
+    ]
+
+    return {
+        "total_submissions": len(rows),
+        "mean_absolute_error": round(
+            sum(absolute_errors) / len(absolute_errors),
+            2,
+        ),
+        "exact_score_agreement": round(
+            (len(exact_matches) / len(rows)) * 100,
+            1,
+        ),
+        "review_flag_rate": round(
+            (len(review_flags) / len(rows)) * 100,
+            1,
+        ),
+    }

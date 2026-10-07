@@ -51,15 +51,21 @@ function App() {
       const parts = line.split("|").map((part) => part.trim());
 
       if (parts.length !== 4) {
-        throw new Error(
-          `Rubric line ${index + 1} must use: Point | keywords | marks`
+      throw new Error(
+        `Rubric line ${index + 1} must use: Point | keywords | expected meaning | marks`
         );
       }
 
      const [point, keywordsText, semanticReference, marksText] = parts;
       const marks = Number(marksText);
 
-      if (!point || !keywordsText || !marks || marks <= 0) {
+      if (
+        !point ||
+        !keywordsText ||
+        !semanticReference ||
+        !marks ||
+        marks <= 0
+      ) {
         throw new Error(`Rubric line ${index + 1} is invalid.`);
       }
 
@@ -167,6 +173,7 @@ function App() {
         ai_score: Number(result.score),
         final_score: Number(finalScore),
         max_marks: Number(result.max_marks),
+        needs_review: result.needs_review,
         }),
       });
 
@@ -303,7 +310,10 @@ async function deleteSubmission(submissionId) {
           <input
             type="file"
             accept="image/png,image/jpeg,image/jpg"
-            onChange={(event) => setOcrFile(event.target.files?.[0] || null)}
+           onChange={(event) => {
+              setOcrFile(event.target.files?.[0] || null);
+              setStoredImagePath("");
+            }}
           />
         </label>
 
@@ -438,6 +448,7 @@ async function deleteSubmission(submissionId) {
                 <th>Final score</th>
                 <th>Maximum</th>
                 <th>Answer Sheet</th>
+                <th>Actions</th>
                 
               </tr>
             </thead>
