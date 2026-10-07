@@ -460,7 +460,19 @@ async function loadAnalytics() {
       
 
       <section className="history">
-        <h2>Saved submissions</h2>
+        <div className="section-header">
+          <h2>Saved submissions</h2>
+
+          {submissions.length > 0 && (
+            <button
+              type="button"
+              className="close-button"
+              onClick={() => setSubmissions([])}
+            >
+              Close
+            </button>
+          )}
+        </div>
 
         <button type="button" onClick={loadSubmissions}>
           {loadingSubmissions ? "Loading..." : "Load saved grades"}
@@ -526,7 +538,19 @@ async function loadAnalytics() {
       </section>
       
       <section className="analytics">
-            <h2>Evaluation Analytics</h2>
+            <div className="section-header">
+              <h2>Evaluation Analytics</h2>
+
+              {analytics && (
+                <button
+                  type="button"
+                  className="close-button"
+                  onClick={() => setAnalytics(null)}
+                >
+                  Close
+                </button>
+              )}
+            </div>
 
             <button type="button" onClick={loadAnalytics}>
               {loadingAnalytics ? "Loading..." : "Load analytics"}
