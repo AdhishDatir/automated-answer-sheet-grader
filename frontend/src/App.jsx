@@ -27,6 +27,10 @@ function App() {
   const [analytics, setAnalytics] = useState(null);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
 
+  const [questions, setQuestions] = useState([]);
+  const [selectedQuestionId, setSelectedQuestionId] = useState("");
+  const [loadingQuestions, setLoadingQuestions] = useState(false);
+
   useEffect(() => {
   if (!ocrFile) {
     setImagePreview("");
@@ -167,6 +171,9 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
         student_name: studentName,
+        question_id: selectedQuestionId
+        ? Number(selectedQuestionId)
+        : null,
         question_title: questionTitle,
         model_answer: modelAnswer,
         student_answer: studentAnswer,
@@ -220,6 +227,10 @@ function App() {
   );
 
   if (newScore === null) return;
+  if (!Number.isFinite(Number(newScore))) {
+  setError("Enter a valid numeric score.");
+  return;
+}
 
   try {
     const response = await fetch(
@@ -241,6 +252,7 @@ function App() {
 
     setSaveMessage(data.message);
     loadSubmissions();
+    loadAnalytics();
   } catch (err) {
     setError(err.message);
   }
@@ -268,6 +280,7 @@ async function deleteSubmission(submissionId) {
 
     setSaveMessage(data.message);
     loadSubmissions();
+    loadAnalytics();
   } catch (err) {
     setError(err.message);
   }
@@ -297,6 +310,81 @@ async function loadAnalytics() {
   }
 }
 
+function rubricToText(rubric) {
+  return rubric
+    .map(
+      (item) =>
+        `${item.point} | ${item.keywords.join(", ")} | ${item.semantic_reference} | ${item.marks}`
+    )
+    .join("\n");
+}
+
+
+async function loadQuestions() {
+  setLoadingQuestions(true);
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/questions`);
+
+    if (!response.ok) {
+      throw new Error("Could not load questions.");
+    }
+
+    setQuestions(await response.json());
+  } catch (err) {
+    setError(err.message);
+  } finally {
+    setLoadingQuestions(false);
+  }
+}
+
+
+async function saveQuestion() {
+  if (!questionTitle.trim() || !modelAnswer.trim()) {
+  setError("Enter a question title and model answer before saving.");
+  return;
+}
+  try {
+    const parsedRubric = parseRubric();
+
+    const response = await fetch(`${API_BASE_URL}/questions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: questionTitle,
+        model_answer: modelAnswer,
+        rubric: parsedRubric,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || "Could not save question.");
+    }
+
+    setSaveMessage(`Question saved. ID: ${data.question_id}`);
+    loadQuestions();
+  } catch (err) {
+    setError(err.message);
+  }
+}
+
+
+function selectQuestion(questionId) {
+  setSelectedQuestionId(questionId);
+
+  const question = questions.find(
+    (item) => item.id === Number(questionId)
+  );
+
+  if (!question) return;
+
+  setQuestionTitle(question.title);
+  setModelAnswer(question.model_answer);
+  setRubricText(rubricToText(question.rubric));
+}
+
   return (
     <main>
       <h1>Automated Answer Sheet Grader</h1>
@@ -312,12 +400,40 @@ async function loadAnalytics() {
             required
           />
         </label>
+        <section className="question-bank">
+          <h2>Question Bank</h2>
 
+          <button type="button" onClick={loadQuestions}>
+            {loadingQuestions ? "Loading..." : "Load saved questions"}
+          </button>
+
+          {questions.length > 0 && (
+            <label>
+              Select a saved question
+              <select
+                value={selectedQuestionId}
+                onChange={(event) => selectQuestion(event.target.value)}
+              >
+                <option value="">Choose a question</option>
+
+                {questions.map((question) => (
+                  <option key={question.id} value={question.id}>
+                    {question.title} ({question.max_marks} marks)
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </section>
+        
         <label>
           Question title
           <input
             value={questionTitle}
-            onChange={(event) => setQuestionTitle(event.target.value)}
+            onChange={(event) => {
+                setQuestionTitle(event.target.value);
+                setSelectedQuestionId("");
+              }}
             placeholder="Example: Explain photosynthesis"
             required
           />
@@ -390,6 +506,10 @@ async function loadAnalytics() {
         <p>
           Format: <code>Rubric point |keywords |expected meaning | marks</code>
         </p>
+      
+          <button type="button" onClick={saveQuestion}>
+            Save current question to bank
+          </button>
 
         <button type="submit" disabled={loading}>
           {loading ? "Grading..." : "Grade answer"}

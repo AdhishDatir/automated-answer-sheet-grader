@@ -1,23 +1,16 @@
-#backend/main.py for the project automated answer sheet grader
-
-
 import json
 import re
 import sqlite3
-import pytesseract
-
+from datetime import datetime
+from io import BytesIO
+from pathlib import Path
 from uuid import uuid4
 
-from fastapi.staticfiles import StaticFiles
-from datetime import datetime
-from pathlib import Path
-from io import BytesIO
-
-from fastapi import File, UploadFile
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps, UnidentifiedImageError
-
-from fastapi import FastAPI, HTTPException
+import pytesseract
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 
 
@@ -35,14 +28,15 @@ app.add_middleware(
 )
 
 DATABASE_FILE = Path(__file__).resolve().parent / "grader.db"
+UPLOAD_DIR = Path(__file__).resolve().parent / "uploads"
+
 LOW_CONFIDENCE_THRESHOLD = 60
 SEMANTIC_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 SEMANTIC_MATCH_THRESHOLD = 0.75
 
 semantic_model = None
 
-UPLOAD_DIR = Path(__file__).resolve().parent / "uploads"
-UPLOAD_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
@@ -67,17 +61,25 @@ class GradeRequest(BaseModel):
     rubric: list[RubricItem]
 
 
+class QuestionRequest(BaseModel):
+    title: str
+    model_answer: str
+    rubric: list[RubricItem]
+
+
 class SubmissionRequest(BaseModel):
     student_name: str
+    question_id: int | None = None
     question_title: str
     model_answer: str
     student_answer: str
     rubric: list[RubricItem]
+    image_path: str | None = None
     ai_score: float
     final_score: float
     max_marks: float
-    image_path: str | None = None
     needs_review: bool = False
+
 
 class SubmissionUpdateRequest(BaseModel):
     student_name: str | None = None
@@ -95,9 +97,21 @@ def create_database():
     cursor = connection.cursor()
 
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            model_answer TEXT NOT NULL,
+            rubric_json TEXT NOT NULL,
+            max_marks REAL NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS submissions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             student_name TEXT NOT NULL,
+            question_id INTEGER,
             question_title TEXT NOT NULL,
             model_answer TEXT NOT NULL,
             student_answer TEXT NOT NULL,
@@ -120,30 +134,42 @@ def upgrade_database():
     cursor = connection.cursor()
 
     columns = cursor.execute("PRAGMA table_info(submissions)").fetchall()
-    column_names = [column[1] for column in columns]
+    column_names = {column[1] for column in columns}
 
     if "student_name" not in column_names:
         cursor.execute(
-            "ALTER TABLE submissions ADD COLUMN student_name TEXT NOT NULL DEFAULT 'Unknown student'"
+            "ALTER TABLE submissions "
+            "ADD COLUMN student_name TEXT NOT NULL DEFAULT 'Unknown student'"
+        )
+
+    if "question_id" not in column_names:
+        cursor.execute(
+            "ALTER TABLE submissions ADD COLUMN question_id INTEGER"
         )
 
     if "question_title" not in column_names:
         cursor.execute(
-            "ALTER TABLE submissions ADD COLUMN question_title TEXT NOT NULL DEFAULT 'Untitled question'"
+            "ALTER TABLE submissions "
+            "ADD COLUMN question_title TEXT NOT NULL DEFAULT 'Untitled question'"
         )
 
     if "rubric_json" not in column_names:
         cursor.execute(
-            "ALTER TABLE submissions ADD COLUMN rubric_json TEXT NOT NULL DEFAULT '[]'"
+            "ALTER TABLE submissions "
+            "ADD COLUMN rubric_json TEXT NOT NULL DEFAULT '[]'"
         )
+
     if "image_path" not in column_names:
         cursor.execute(
             "ALTER TABLE submissions ADD COLUMN image_path TEXT"
         )
+
     if "needs_review" not in column_names:
         cursor.execute(
-        "ALTER TABLE submissions ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0"
+            "ALTER TABLE submissions "
+            "ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0"
         )
+
     connection.commit()
     connection.close()
 
@@ -155,32 +181,133 @@ def startup():
 
 
 def clean_text(text: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", text.lower())).strip()
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def validate_rubric(rubric: list[RubricItem]):
+    if not rubric:
+        raise HTTPException(
+            status_code=400,
+            detail="Add at least one rubric point.",
+        )
+
+    for item in rubric:
+        if not item.point.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Each rubric point needs a title.",
+            )
+
+        if not item.keywords:
+            raise HTTPException(
+                status_code=400,
+                detail="Each rubric point needs at least one keyword.",
+            )
+
+        if not item.semantic_reference.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Each rubric point needs an expected meaning.",
+            )
+
+        if item.marks <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Rubric marks must be greater than zero.",
+            )
+
+
+def rubric_to_json(rubric: list[RubricItem]):
+    return [
+        {
+            "point": item.point,
+            "keywords": item.keywords,
+            "semantic_reference": item.semantic_reference,
+            "marks": item.marks,
+        }
+        for item in rubric
+    ]
+
+
+def get_semantic_model():
+    global semantic_model
+
+    if semantic_model is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            semantic_model = SentenceTransformer(SEMANTIC_MODEL_NAME)
+
+        except ImportError:
+            raise HTTPException(
+                status_code=500,
+                detail="sentence-transformers is not installed.",
+            )
+
+        except Exception:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Could not load the SBERT model. "
+                    "Check your internet connection."
+                ),
+            )
+
+    return semantic_model
+
+
+def calculate_semantic_similarities(student_answer, references):
+    model = get_semantic_model()
+
+    embeddings = model.encode(
+        [student_answer, *references],
+        normalize_embeddings=True,
+    )
+
+    student_embedding = embeddings[0]
+    reference_embeddings = embeddings[1:]
+
+    return [
+        float(student_embedding @ reference_embedding)
+        for reference_embedding in reference_embeddings
+    ]
 
 
 @app.get("/")
 def welcome():
-    return {"message": "Answer Sheet Grader backend is running"}
+    return {
+        "message": "Answer Sheet Grader backend is running"
+    }
+
 
 @app.post("/ocr")
 async def extract_text_from_image(file: UploadFile = File(...)):
+    allowed_extensions = {".jpg", ".jpeg", ".png"}
+
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(
             status_code=400,
-            detail="Upload an image file such as PNG, JPG, or JPEG.",
+            detail="Upload a PNG, JPG, or JPEG image.",
+        )
+
+    extension = Path(file.filename or "answer.jpg").suffix.lower()
+
+    if extension not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail="Only PNG, JPG, and JPEG images are supported.",
         )
 
     try:
         file_bytes = await file.read()
         image = Image.open(BytesIO(file_bytes))
 
-        # Save the original image with a unique name.
-        extension = Path(file.filename or "answer.jpg").suffix.lower()
         stored_filename = f"{uuid4().hex}{extension}"
         stored_image_path = UPLOAD_DIR / stored_filename
         stored_image_path.write_bytes(file_bytes)
 
-        # Preprocess a copy for OCR.
         image = ImageOps.exif_transpose(image)
         image = ImageOps.grayscale(image)
         image = ImageOps.autocontrast(image)
@@ -190,11 +317,16 @@ async def extract_text_from_image(file: UploadFile = File(...)):
         if image.width < 1600:
             scale = 1600 / image.width
             image = image.resize(
-                (int(image.width * scale), int(image.height * scale)),
+                (
+                    int(image.width * scale),
+                    int(image.height * scale),
+                ),
                 Image.Resampling.LANCZOS,
             )
 
-        image = image.point(lambda pixel: 0 if pixel < 170 else 255)
+        image = image.point(
+            lambda pixel: 0 if pixel < 170 else 255
+        )
 
         extracted_text = pytesseract.image_to_string(
             image,
@@ -213,41 +345,51 @@ async def extract_text_from_image(file: UploadFile = File(...)):
             status_code=400,
             detail="The uploaded file is not a readable image.",
         )
+
     except pytesseract.TesseractNotFoundError:
         raise HTTPException(
             status_code=500,
-            detail="Tesseract is not installed or its path is incorrect.",
+            detail=(
+                "Tesseract is not installed "
+                "or its path is incorrect."
+            ),
         )
+
 
 @app.post("/grade")
 def grade_answer(data: GradeRequest):
-    if not data.rubric:
-        raise HTTPException(status_code=400, detail="Add at least one rubric point.")
+    validate_rubric(data.rubric)
 
     student_text = clean_text(data.student_answer)
-    score = 0
-    total_marks = 0
+
+    score = 0.0
+    total_marks = 0.0
     breakdown = []
 
     semantic_scores = calculate_semantic_similarities(
-    data.student_answer,
-    [item.semantic_reference for item in data.rubric],
-)
+        data.student_answer,
+        [item.semantic_reference for item in data.rubric],
+    )
 
     for item, semantic_score in zip(data.rubric, semantic_scores):
         total_marks += item.marks
 
-        matched_keywords = [
-            keyword
-            for keyword in item.keywords
-            if clean_text(keyword) in student_text
-        ]
+        matched_keywords = []
+
+        for keyword in item.keywords:
+            cleaned_keyword = clean_text(keyword)
+
+            if cleaned_keyword and cleaned_keyword in student_text:
+                matched_keywords.append(keyword)
 
         keyword_matched = len(matched_keywords) > 0
-        semantic_matched = semantic_score >= SEMANTIC_MATCH_THRESHOLD
+
+        semantic_matched = (
+            semantic_score >= SEMANTIC_MATCH_THRESHOLD
+        )
 
         matched = keyword_matched or semantic_matched
-        awarded_marks = item.marks if matched else 0
+        awarded_marks = item.marks if matched else 0.0
         score += awarded_marks
 
         if keyword_matched and semantic_matched:
@@ -265,86 +407,148 @@ def grade_answer(data: GradeRequest):
             "awarded_marks": awarded_marks,
             "matched": matched,
             "matched_keywords": matched_keywords,
-            "semantic_similarity": round(semantic_score * 100, 1),
+            "semantic_similarity": round(
+                semantic_score * 100,
+                1,
+            ),
             "match_method": match_method,
         })
 
-    confidence = round((score / total_marks) * 100, 1) if total_marks else 0
+    confidence = (
+        round((score / total_marks) * 100, 1)
+        if total_marks
+        else 0
+    )
 
     return {
-    "score": round(score, 1),
-    "max_marks": round(total_marks, 1),
-    "confidence": confidence,
-    "needs_review": confidence < LOW_CONFIDENCE_THRESHOLD,
-    "review_reason": (
-        "Low rubric coverage. Teacher review is required."
-        if confidence < LOW_CONFIDENCE_THRESHOLD
-        else "Rubric coverage is acceptable."
-    ),
-    "rubric_breakdown": breakdown,
-}
+        "score": round(score, 1),
+        "max_marks": round(total_marks, 1),
+        "confidence": confidence,
+        "needs_review": confidence < LOW_CONFIDENCE_THRESHOLD,
+        "review_reason": (
+            "Low rubric coverage. Teacher review is required."
+            if confidence < LOW_CONFIDENCE_THRESHOLD
+            else "Rubric coverage is acceptable."
+        ),
+        "rubric_breakdown": breakdown,
+    }
+
+
+@app.post("/questions")
+def save_question(data: QuestionRequest):
+    validate_rubric(data.rubric)
+
+    max_marks = sum(item.marks for item in data.rubric)
+    rubric_data = rubric_to_json(data.rubric)
+
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO questions
+        (title, model_answer, rubric_json, max_marks, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            data.title.strip(),
+            data.model_answer.strip(),
+            json.dumps(rubric_data),
+            max_marks,
+            datetime.now().isoformat(timespec="seconds"),
+        ),
+    )
+
+    question_id = cursor.lastrowid
+
+    connection.commit()
+    connection.close()
+
+    return {
+        "message": "Question saved successfully.",
+        "question_id": question_id,
+        "max_marks": max_marks,
+    }
+
+
+@app.get("/questions")
+def get_questions():
+    connection = get_connection()
+    connection.row_factory = sqlite3.Row
+    cursor = connection.cursor()
+
+    rows = cursor.execute(
+        "SELECT * FROM questions ORDER BY id DESC"
+    ).fetchall()
+
+    connection.close()
+
+    questions = []
+
+    for row in rows:
+        question = dict(row)
+        question["rubric"] = json.loads(
+            question.pop("rubric_json", "[]")
+        )
+        questions.append(question)
+
+    return questions
 
 
 @app.post("/submissions")
 def save_submission(data: SubmissionRequest):
+    validate_rubric(data.rubric)
+
     if data.final_score < 0 or data.final_score > data.max_marks:
         raise HTTPException(
             status_code=400,
             detail="Final score must be between 0 and maximum marks.",
         )
 
-    rubric_data = [
-    {
-        "point": item.point,
-        "keywords": item.keywords,
-        "semantic_reference": item.semantic_reference,
-        "marks": item.marks,
-    }
-    for item in data.rubric
-]
-
     connection = get_connection()
     cursor = connection.cursor()
 
     cursor.execute(
-    """
-    INSERT INTO submissions
-    (
-        student_name,
-        question_title,
-        model_answer,
-        student_answer,
-        rubric_json,
-        image_path,
-        ai_score,
-        final_score,
-        max_marks,
-        needs_review,
-        created_at
+        """
+        INSERT INTO submissions (
+            student_name,
+            question_id,
+            question_title,
+            model_answer,
+            student_answer,
+            rubric_json,
+            image_path,
+            ai_score,
+            final_score,
+            max_marks,
+            needs_review,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            data.student_name.strip(),
+            data.question_id,
+            data.question_title.strip(),
+            data.model_answer.strip(),
+            data.student_answer.strip(),
+            json.dumps(rubric_to_json(data.rubric)),
+            data.image_path,
+            data.ai_score,
+            data.final_score,
+            data.max_marks,
+            int(data.needs_review),
+            datetime.now().isoformat(timespec="seconds"),
+        ),
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """,
-    (
-        data.student_name,
-        data.question_title,
-        data.model_answer,
-        data.student_answer,
-        json.dumps(rubric_data),
-        data.image_path,
-        data.ai_score,
-        data.final_score,
-        data.max_marks,
-        int(data.needs_review),
-        datetime.now().isoformat(timespec="seconds"),
-    ),
-)
 
     submission_id = cursor.lastrowid
+
     connection.commit()
     connection.close()
 
     return {
-        "message": "Grade saved successfully",
+        "message": "Grade saved successfully.",
         "submission_id": submission_id,
     }
 
@@ -365,7 +569,9 @@ def get_submissions():
 
     for row in rows:
         submission = dict(row)
-        submission["rubric"] = json.loads(submission.pop("rubric_json", "[]"))
+        submission["rubric"] = json.loads(
+            submission.pop("rubric_json", "[]")
+        )
         submissions.append(submission)
 
     return submissions
@@ -387,6 +593,7 @@ def update_submission(
 
     if not submission:
         connection.close()
+
         raise HTTPException(
             status_code=404,
             detail="Submission not found.",
@@ -394,32 +601,45 @@ def update_submission(
 
     if (
         data.final_score is not None
-        and (data.final_score < 0 or data.final_score > submission["max_marks"])
+        and (
+            data.final_score < 0
+            or data.final_score > submission["max_marks"]
+        )
     ):
         connection.close()
+
         raise HTTPException(
             status_code=400,
             detail="Final score must be between 0 and maximum marks.",
         )
 
     updates = {}
+
     if data.student_name is not None:
         updates["student_name"] = data.student_name
+
     if data.question_title is not None:
         updates["question_title"] = data.question_title
+
     if data.student_answer is not None:
         updates["student_answer"] = data.student_answer
+
     if data.final_score is not None:
         updates["final_score"] = data.final_score
 
     if not updates:
         connection.close()
+
         raise HTTPException(
             status_code=400,
             detail="Provide at least one field to update.",
         )
 
-    assignments = ", ".join(f"{column} = ?" for column in updates)
+    assignments = ", ".join(
+        f"{column} = ?"
+        for column in updates
+    )
+
     values = list(updates.values()) + [submission_id]
 
     cursor.execute(
@@ -430,7 +650,9 @@ def update_submission(
     connection.commit()
     connection.close()
 
-    return {"message": "Submission updated successfully."}
+    return {
+        "message": "Submission updated successfully."
+    }
 
 
 @app.delete("/submissions/{submission_id}")
@@ -445,6 +667,7 @@ def delete_submission(submission_id: int):
 
     if cursor.rowcount == 0:
         connection.close()
+
         raise HTTPException(
             status_code=404,
             detail="Submission not found.",
@@ -453,47 +676,9 @@ def delete_submission(submission_id: int):
     connection.commit()
     connection.close()
 
-    return {"message": "Submission deleted successfully."}
-
-
-
-def get_semantic_model():
-    global semantic_model
-
-    if semantic_model is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-
-            semantic_model = SentenceTransformer(SEMANTIC_MODEL_NAME)
-        except ImportError:
-            raise HTTPException(
-                status_code=500,
-                detail="sentence-transformers is not installed.",
-            )
-        except Exception:
-            raise HTTPException(
-                status_code=500,
-                detail="Could not load the SBERT model. Check your internet connection.",
-            )
-
-    return semantic_model
-
-
-def calculate_semantic_similarities(student_answer, references):
-    model = get_semantic_model()
-
-    embeddings = model.encode(
-        [student_answer, *references],
-        normalize_embeddings=True,
-    )
-
-    student_embedding = embeddings[0]
-    reference_embeddings = embeddings[1:]
-
-    return [
-        float(student_embedding @ reference_embedding)
-        for reference_embedding in reference_embeddings
-    ]
+    return {
+        "message": "Submission deleted successfully."
+    }
 
 
 @app.get("/analytics/evaluation")
@@ -523,12 +708,14 @@ def get_evaluation_metrics():
     ]
 
     exact_matches = [
-        row for row in rows
+        row
+        for row in rows
         if abs(row["ai_score"] - row["final_score"]) < 0.01
     ]
 
     review_flags = [
-        row for row in rows
+        row
+        for row in rows
         if row["needs_review"] == 1
     ]
 
