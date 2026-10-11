@@ -385,6 +385,18 @@ function selectQuestion(questionId) {
   setRubricText(rubricToText(question.rubric));
 }
 
+
+function exportFinalGrades() {
+  const questionFilter = selectedQuestionId
+    ? `?question_id=${selectedQuestionId}`
+    : "";
+
+  window.open(
+    `${API_BASE_URL}/exports/final-grades.csv${questionFilter}`,
+    "_blank"
+  );
+}
+
   return (
     <main>
       <h1>Automated Answer Sheet Grader</h1>
@@ -594,6 +606,9 @@ function selectQuestion(questionId) {
           )}
         </div>
 
+        <button type="button" onClick={exportFinalGrades}>
+          Export final grades as CSV
+        </button>
         <button type="button" onClick={loadSubmissions}>
           {loadingSubmissions ? "Loading..." : "Load saved grades"}
         </button>

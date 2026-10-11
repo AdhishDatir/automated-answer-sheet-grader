@@ -1,12 +1,15 @@
 import json
 import re
 import sqlite3
+import csv
+import pytesseract
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
-import pytesseract
+from io import StringIO
+from fastapi.responses import StreamingResponse
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -87,6 +90,12 @@ class SubmissionUpdateRequest(BaseModel):
     student_answer: str | None = None
     final_score: float | None = None
 
+DB_NAME = "grader.db"  
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def get_connection():
     return sqlite3.connect(DATABASE_FILE)
@@ -680,6 +689,70 @@ def delete_submission(submission_id: int):
         "message": "Submission deleted successfully."
     }
 
+@app.get("/exports/final-grades.csv")
+def export_final_grades(question_id: int | None = None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT
+            student_name,
+            question_title,
+            ai_score,
+            final_score,
+            max_marks,
+            needs_review,
+            created_at
+        FROM submissions
+    """
+
+    values = []
+
+    if question_id is not None:
+        query += " WHERE question_id = ?"
+        values.append(question_id)
+
+    query += " ORDER BY id DESC"
+
+    cursor.execute(query, values)
+    rows = cursor.fetchall()
+    conn.close()
+
+    output = StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow(
+        [
+            "Student Name",
+            "Question",
+            "AI Score",
+            "Final Score",
+            "Maximum Marks",
+            "Needs Review",
+            "Created At",
+        ]
+    )
+
+    for row in rows:
+        writer.writerow(
+            [
+                row["student_name"],
+                row["question_title"],
+                row["ai_score"],
+                row["final_score"],
+                row["max_marks"],
+                "Yes" if row["needs_review"] else "No",
+                row["created_at"],
+            ]
+        )
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="final-grades.csv"'
+        },
+    )
 
 @app.get("/analytics/evaluation")
 def get_evaluation_metrics():
