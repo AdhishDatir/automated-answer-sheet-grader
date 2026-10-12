@@ -31,6 +31,11 @@ function App() {
   const [selectedQuestionId, setSelectedQuestionId] = useState("");
   const [loadingQuestions, setLoadingQuestions] = useState(false);
 
+  const [batchFiles, setBatchFiles] = useState([]);
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [batchProgress, setBatchProgress] = useState("");
+  const [batchResults, setBatchResults] = useState([]);
+
   useEffect(() => {
   if (!ocrFile) {
     setImagePreview("");
@@ -397,6 +402,131 @@ function exportFinalGrades() {
   );
 }
 
+
+function studentNameFromFile(fileName) {
+  return fileName
+    .replace(/\.[^/.]+$/, "")
+    .replace(/[_-]/g, " ");
+}
+
+async function gradeBatchAnswers() {
+  if (batchFiles.length === 0) {
+    setError("Select one or more answer-sheet images first.");
+    return;
+  }
+
+  let parsedRubric;
+
+try {
+  parsedRubric = parseRubric();
+} catch (error) {
+  setError(error.message);
+  return;
+}
+
+if (!modelAnswer.trim()) {
+  setError("Select a Question Bank question or enter a model answer.");
+  return;
+}
+
+  setBatchLoading(true);
+  setBatchResults([]);
+  setError("");
+
+  const results = [];
+
+  for (let index = 0; index < batchFiles.length; index += 1) {
+    const file = batchFiles[index];
+
+    try {
+      setBatchProgress(
+        `Processing ${index + 1} of ${batchFiles.length}: ${file.name}`
+      );
+
+      // Step 1: OCR
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const ocrResponse = await fetch(`${API_BASE_URL}/ocr`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!ocrResponse.ok) {
+        throw new Error("OCR could not read this image.");
+      }
+
+      const ocrData = await ocrResponse.json();
+
+      // Step 2: AI grading
+      const gradeResponse = await fetch(`${API_BASE_URL}/grade`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model_answer: modelAnswer,
+          student_answer: ocrData.extracted_text,
+          rubric: parsedRubric,
+        }),
+      });
+
+      if (!gradeResponse.ok) {
+        throw new Error("AI grading failed for this image.");
+      }
+
+      const gradeData = await gradeResponse.json();
+
+      // Step 3: save grade to SQLite
+      const saveResponse = await fetch(`${API_BASE_URL}/submissions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          student_name: studentNameFromFile(file.name),
+          question_id: selectedQuestionId
+            ? Number(selectedQuestionId)
+            : null,
+          question_title: questionTitle,
+          model_answer: modelAnswer,
+          student_answer: ocrData.extracted_text,
+          rubric: parsedRubric,
+          image_path: ocrData.image_path || "",
+          ai_score: Number(gradeData.score),
+          final_score: Number(gradeData.score),
+          max_marks: Number(gradeData.max_marks),
+          needs_review: gradeData.needs_review,
+        }),
+      });
+
+      if (!saveResponse.ok) {
+        throw new Error("Grade was created but could not be saved.");
+      }
+
+      results.push({
+        fileName: file.name,
+        status: "Saved",
+        score: gradeData.score,
+        maxMarks: gradeData.max_marks,
+      });
+    } catch (error) {
+      results.push({
+        fileName: file.name,
+        status: error.message || "Failed",
+      });
+    }
+
+    setBatchResults([...results]);
+  }
+
+  setBatchProgress(`Completed: ${batchFiles.length} answer sheets processed.`);
+  setBatchLoading(false);
+
+  loadSubmissions();
+  loadAnalytics();
+}
+
   return (
     <main>
       <h1>Automated Answer Sheet Grader</h1>
@@ -461,13 +591,12 @@ function exportFinalGrades() {
           />
         </label>
         <label>
-          Upload typed answer sheet image
+          Upload one answer sheet image
           <input
             type="file"
             accept="image/png,image/jpeg,image/jpg"
-           onChange={(event) => {
+            onChange={(event) => {
               setOcrFile(event.target.files?.[0] || null);
-              setStoredImagePath("");
             }}
           />
         </label>
@@ -500,6 +629,62 @@ function exportFinalGrades() {
           />
         </label>
       </div>
+      
+      <section className="batch-section">
+        <h2>Batch grade answer sheets</h2>
+
+        <p>
+          Select multiple images. Each filename becomes the temporary student name.
+        </p>
+
+        <input
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={(event) =>
+            setBatchFiles(Array.from(event.target.files || []))
+          }
+        />
+
+        {batchFiles.length > 0 && (
+          <p>{batchFiles.length} image(s) selected.</p>
+        )}
+
+        <button
+          type="button"
+          onClick={gradeBatchAnswers}
+          disabled={batchLoading}
+        >
+          {batchLoading ? "Batch grading..." : "Grade selected answer sheets"}
+        </button>
+
+        {batchProgress && <p>{batchProgress}</p>}
+
+        {batchResults.length > 0 && (
+          <table>
+            <thead>
+              <tr>
+                <th>Image file</th>
+                <th>Status</th>
+                <th>Score</th>
+              </tr>
+            </thead>
+            <tbody>
+              {batchResults.map((item) => (
+                <tr key={item.fileName}>
+                  <td>{item.fileName}</td>
+                  <td>{item.status}</td>
+                  <td>
+                    {item.score !== undefined
+                      ? `${item.score} / ${item.maxMarks}`
+                      : "-"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
 
         <label>
           Rubric — one point per line
