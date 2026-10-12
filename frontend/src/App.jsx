@@ -31,7 +31,7 @@ function App() {
   const [selectedQuestionId, setSelectedQuestionId] = useState("");
   const [loadingQuestions, setLoadingQuestions] = useState(false);
 
-  const [batchFiles, setBatchFiles] = useState([]);
+  
   const [batchLoading, setBatchLoading] = useState(false);
   const [batchProgress, setBatchProgress] = useState("");
   const [batchResults, setBatchResults] = useState([]);
