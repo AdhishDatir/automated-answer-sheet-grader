@@ -503,6 +503,24 @@ def get_questions():
 
     return questions
 
+@app.delete("/questions/{question_id}")
+def delete_question(question_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id FROM questions WHERE id = ?", (question_id,))
+    question = cursor.fetchone()
+
+    if question is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Question not found.")
+
+    cursor.execute("DELETE FROM questions WHERE id = ?", (question_id,))
+    conn.commit()
+    conn.close()
+
+    return {"message": "Question deleted successfully."}
+
 
 @app.post("/submissions")
 def save_submission(data: SubmissionRequest):

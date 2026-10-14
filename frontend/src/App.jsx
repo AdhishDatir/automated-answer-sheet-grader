@@ -527,6 +527,53 @@ if (!modelAnswer.trim()) {
   loadAnalytics();
 }
 
+
+
+async function deleteSelectedQuestion() {
+  if (!selectedQuestionId) {
+    setError("Select a Question Bank item before deleting it.");
+    return;
+  }
+
+  const question = questions.find(
+    (item) => item.id === Number(selectedQuestionId)
+  );
+
+  const confirmed = window.confirm(
+    `Delete this Question Bank item?\n\n${question?.title || ""}`
+  );
+
+  if (!confirmed) return;
+
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/questions/${selectedQuestionId}`,
+      {
+        method: "DELETE",
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || "Could not delete the question.");
+    }
+
+    setSaveMessage(data.message);
+
+    // Clear the currently selected question from the form.
+    setSelectedQuestionId("");
+    setQuestionTitle("");
+    setModelAnswer("");
+    setRubricText("");
+    setRubricItems([]);
+
+    loadQuestions();
+  } catch (err) {
+    setError(err.message);
+  }
+}
+
   return (
     <main>
       <h1>Automated Answer Sheet Grader</h1>
@@ -564,6 +611,14 @@ if (!modelAnswer.trim()) {
                   </option>
                 ))}
               </select>
+              <button
+            type="button"
+            className="delete-button"
+            onClick={deleteSelectedQuestion}
+            disabled={!selectedQuestionId}
+          >
+            Delete selected question
+          </button> 
             </label>
           )}
         </section>
