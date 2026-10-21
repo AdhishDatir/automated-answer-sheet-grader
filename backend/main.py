@@ -522,6 +522,53 @@ def delete_question(question_id: int):
     return {"message": "Question deleted successfully."}
 
 
+@app.put("/questions/{question_id}")
+def update_question(question_id: int, data: QuestionRequest):
+    validate_rubric(data.rubric)
+
+    if not data.title.strip() or not data.model_answer.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Question title and model answer are required.",
+        )
+
+    max_marks = sum(item.marks for item in data.rubric)
+    rubric_data = rubric_to_json(data.rubric)
+
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        UPDATE questions
+        SET title = ?, model_answer = ?, rubric_json = ?, max_marks = ?
+        WHERE id = ?
+        """,
+        (
+            data.title.strip(),
+            data.model_answer.strip(),
+            json.dumps(rubric_data),
+            max_marks,
+            question_id,
+        ),
+    )
+
+    if cursor.rowcount == 0:
+        connection.close()
+        raise HTTPException(
+            status_code=404,
+            detail="Question not found.",
+        )
+
+    connection.commit()
+    connection.close()
+
+    return {
+        "message": "Question updated successfully.",
+        "question_id": question_id,
+        "max_marks": max_marks,
+    }
+
 @app.post("/submissions")
 def save_submission(data: SubmissionRequest):
     validate_rubric(data.rubric)

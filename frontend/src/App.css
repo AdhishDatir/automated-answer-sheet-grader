@@ -193,3 +193,9 @@ th {
   padding: 8px 14px;
   font-size: 0.9rem;
 }
+
+.success-message {
+  color: #15803d;
+  font-weight: 600;
+  margin-top: 10px;
+}

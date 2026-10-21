@@ -574,6 +574,45 @@ async function deleteSelectedQuestion() {
   }
 }
 
+async function updateSelectedQuestion() {
+  if (!selectedQuestionId) {
+    setError("Select a Question Bank item before updating it.");
+    return;
+  }
+
+  try {
+    const parsedRubric = parseRubric();
+
+    const response = await fetch(
+      `${API_BASE_URL}/questions/${selectedQuestionId}`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: questionTitle,
+          model_answer: modelAnswer,
+          rubric: parsedRubric,
+        }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || "Could not update the question.");
+    }
+
+    setRubricItems(parsedRubric);
+    setSaveMessage(data.message);
+    loadQuestions();
+  } catch (err) {
+    setError(err.message);
+  }
+}
+
+
   return (
     <main>
       <h1>Automated Answer Sheet Grader</h1>
@@ -629,7 +668,6 @@ async function deleteSelectedQuestion() {
             value={questionTitle}
             onChange={(event) => {
                 setQuestionTitle(event.target.value);
-                setSelectedQuestionId("");
               }}
             placeholder="Example: Explain photosynthesis"
             required
@@ -758,11 +796,19 @@ async function deleteSelectedQuestion() {
         <p>
           Format: <code>Rubric point |keywords |expected meaning | marks</code>
         </p>
-      
+          <button
+            type="button"
+            onClick={updateSelectedQuestion}
+            disabled={!selectedQuestionId}
+          >
+            Update selected question
+          </button>
           <button type="button" onClick={saveQuestion}>
             Save current question to bank
           </button>
-
+        {saveMessage && (
+            <p className="success-message">{saveMessage}</p>
+        )}
         <button type="submit" disabled={loading}>
           {loading ? "Grading..." : "Grade answer"}
         </button>
