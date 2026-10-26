@@ -3,7 +3,48 @@ import "./App.css";
 
 const API_BASE_URL = "http://127.0.0.1:8000";
 
+const RUBRIC_PLACEHOLDER = [
+  "Uses sunlight | sunlight | Plants use sunlight for photosynthesis. | 1",
+  "Uses water | water | Plants need water during photosynthesis. | 1",
+  "Uses carbon dioxide | carbon dioxide, carbon | Plants use carbon dioxide from air. | 1",
+  "Produces glucose or food | glucose, food | Plants make glucose or food. | 1",
+  "Releases oxygen | oxygen | Oxygen is released during photosynthesis. | 1",
+].join("\n");
+
+const TABS = [
+  { id: "single", label: "Grade one sheet" },
+  { id: "batch", label: "Batch grading" },
+  { id: "records", label: "Saved grades" },
+  { id: "analytics", label: "Analytics" },
+];
+
+function ScoreRing({ score, max }) {
+  const radius = 44;
+  const circumference = 2 * Math.PI * radius;
+  const ratio = max > 0 ? Math.min(Math.max(score / max, 0), 1) : 0;
+  return (
+    <div className="score-ring" role="img" aria-label={`Score ${score} out of ${max}`}>
+      <svg viewBox="0 0 100 100">
+        <circle className="ring-track" cx="50" cy="50" r={radius} />
+        <circle
+          className="ring-value"
+          cx="50"
+          cy="50"
+          r={radius}
+          strokeDasharray={`${circumference * ratio} ${circumference}`}
+        />
+      </svg>
+      <div className="ring-label">
+        <strong>{score}</strong>
+        <span>of {max}</span>
+      </div>
+    </div>
+  );
+}
+
 function App() {
+  const [tab, setTab] = useState("single");
+
   const [studentName, setStudentName] = useState("");
   const [questionTitle, setQuestionTitle] = useState("");
   const [modelAnswer, setModelAnswer] = useState("");
@@ -37,16 +78,22 @@ function App() {
   const [batchResults, setBatchResults] = useState([]);
 
   useEffect(() => {
-  if (!ocrFile) {
-    setImagePreview("");
-    return;
-  }
-
-  const previewUrl = URL.createObjectURL(ocrFile);
-  setImagePreview(previewUrl);
-
-  return () => URL.revokeObjectURL(previewUrl);
+    if (!ocrFile) {
+      setImagePreview("");
+      return;
+    }
+    const previewUrl = URL.createObjectURL(ocrFile);
+    setImagePreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
   }, [ocrFile]);
+
+  // Load saved data once when the page opens.
+  useEffect(() => {
+    loadQuestions();
+    loadSubmissions();
+    loadAnalytics();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function parseRubric() {
     const lines = rubricText
@@ -62,69 +109,61 @@ function App() {
       const parts = line.split("|").map((part) => part.trim());
 
       if (parts.length !== 4) {
-      throw new Error(
-        `Rubric line ${index + 1} must use: Point | keywords | expected meaning | marks`
+        throw new Error(
+          `Rubric line ${index + 1} must use: Point | keywords | expected meaning | marks`
         );
       }
 
-     const [point, keywordsText, semanticReference, marksText] = parts;
+      const [point, keywordsText, semanticReference, marksText] = parts;
       const marks = Number(marksText);
 
-      if (
-        !point ||
-        !keywordsText ||
-        !semanticReference ||
-        !marks ||
-        marks <= 0
-      ) {
+      if (!point || !keywordsText || !semanticReference || !marks || marks <= 0) {
         throw new Error(`Rubric line ${index + 1} is invalid.`);
       }
 
       return {
-          point,
-          keywords: keywordsText
-            .split(",")
-            .map((keyword) => keyword.trim())
-            .filter(Boolean),
-          semantic_reference: semanticReference,
-          marks,
+        point,
+        keywords: keywordsText
+          .split(",")
+          .map((keyword) => keyword.trim())
+          .filter(Boolean),
+        semantic_reference: semanticReference,
+        marks,
       };
     });
   }
 
   async function extractTextFromImage() {
-  if (!ocrFile) {
-    setError("Choose an answer-sheet image first.");
-    return;
-  }
-
-  setOcrLoading(true);
-  setError("");
-
-  const formData = new FormData();
-  formData.append("file", ocrFile);
-
-  try {
-    const response = await fetch(`${API_BASE_URL}/ocr`, {
-      method: "POST",
-      body: formData,
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.detail || "OCR could not extract text.");
+    if (!ocrFile) {
+      setError("Choose an answer-sheet image first.");
+      return;
     }
 
-    // Sends OCR output into the editable Student Answer field.
-    setStudentAnswer(data.extracted_text);
-    setStoredImagePath(data.image_path);
-  } catch (err) {
-    setError(err.message);
-  } finally {
-    setOcrLoading(false);
+    setOcrLoading(true);
+    setError("");
+
+    const formData = new FormData();
+    formData.append("file", ocrFile);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/ocr`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "OCR could not extract text.");
+      }
+
+      setStudentAnswer(data.extracted_text);
+      setStoredImagePath(data.image_path);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setOcrLoading(false);
+    }
   }
-}
 
   async function gradeAnswer(event) {
     event.preventDefault();
@@ -136,6 +175,9 @@ function App() {
     setApproved(false);
 
     try {
+      if (!modelAnswer.trim()) {
+        throw new Error("Add a model answer in the Question panel first.");
+      }
       const parsedRubric = parseRubric();
 
       const response = await fetch(`${API_BASE_URL}/grade`, {
@@ -147,7 +189,6 @@ function App() {
           rubric: parsedRubric,
         }),
       });
-
       const data = await response.json();
 
       if (!response.ok) {
@@ -175,22 +216,19 @@ function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-        student_name: studentName,
-        question_id: selectedQuestionId
-        ? Number(selectedQuestionId)
-        : null,
-        question_title: questionTitle,
-        model_answer: modelAnswer,
-        student_answer: studentAnswer,
-        rubric: rubricItems,
-        image_path: storedImagePath,
-        ai_score: Number(result.score),
-        final_score: Number(finalScore),
-        max_marks: Number(result.max_marks),
-        needs_review: result.needs_review,
+          student_name: studentName,
+          question_id: selectedQuestionId ? Number(selectedQuestionId) : null,
+          question_title: questionTitle,
+          model_answer: modelAnswer,
+          student_answer: studentAnswer,
+          rubric: rubricItems,
+          image_path: storedImagePath,
+          ai_score: Number(result.score),
+          final_score: Number(finalScore),
+          max_marks: Number(result.max_marks),
+          needs_review: result.needs_review,
         }),
       });
-
       const data = await response.json();
 
       if (!response.ok) {
@@ -211,11 +249,9 @@ function App() {
 
     try {
       const response = await fetch(`${API_BASE_URL}/submissions`);
-
       if (!response.ok) {
         throw new Error("Could not load saved submissions.");
       }
-
       setSubmissions(await response.json());
     } catch (err) {
       setError(err.message);
@@ -224,784 +260,775 @@ function App() {
     }
   }
 
-
   async function updateFinalScore(submission) {
-  const newScore = window.prompt(
-    `Enter the new final score. Maximum: ${submission.max_marks}`,
-    submission.final_score
-  );
-
-  if (newScore === null) return;
-  if (!Number.isFinite(Number(newScore))) {
-  setError("Enter a valid numeric score.");
-  return;
-}
-
-  try {
-    const response = await fetch(
-      `${API_BASE_URL}/submissions/${submission.id}`,
-      {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          final_score: Number(newScore),
-        }),
-      }
+    const newScore = window.prompt(
+      `Enter the new final score. Maximum: ${submission.max_marks}`,
+      submission.final_score
     );
 
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.detail || "Could not update the score.");
+    if (newScore === null) return;
+    if (!Number.isFinite(Number(newScore))) {
+      setError("Enter a valid numeric score.");
+      return;
     }
-
-    setSaveMessage(data.message);
-    loadSubmissions();
-    loadAnalytics();
-  } catch (err) {
-    setError(err.message);
-  }
-}
-
-
-async function deleteSubmission(submissionId) {
-  const confirmed = window.confirm(
-    "Delete this saved grade? This cannot be undone."
-  );
-
-  if (!confirmed) return;
-
-  try {
-    const response = await fetch(
-      `${API_BASE_URL}/submissions/${submissionId}`,
-      { method: "DELETE" }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.detail || "Could not delete the submission.");
-    }
-
-    setSaveMessage(data.message);
-    loadSubmissions();
-    loadAnalytics();
-  } catch (err) {
-    setError(err.message);
-  }
-}
-
-
-async function loadAnalytics() {
-  setLoadingAnalytics(true);
-  setError("");
-
-  try {
-    const response = await fetch(
-      `${API_BASE_URL}/analytics/evaluation`
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error("Could not load evaluation analytics.");
-    }
-
-    setAnalytics(data);
-  } catch (err) {
-    setError(err.message);
-  } finally {
-    setLoadingAnalytics(false);
-  }
-}
-
-function rubricToText(rubric) {
-  return rubric
-    .map(
-      (item) =>
-        `${item.point} | ${item.keywords.join(", ")} | ${item.semantic_reference} | ${item.marks}`
-    )
-    .join("\n");
-}
-
-
-async function loadQuestions() {
-  setLoadingQuestions(true);
-
-  try {
-    const response = await fetch(`${API_BASE_URL}/questions`);
-
-    if (!response.ok) {
-      throw new Error("Could not load questions.");
-    }
-
-    setQuestions(await response.json());
-  } catch (err) {
-    setError(err.message);
-  } finally {
-    setLoadingQuestions(false);
-  }
-}
-
-
-async function saveQuestion() {
-  if (!questionTitle.trim() || !modelAnswer.trim()) {
-  setError("Enter a question title and model answer before saving.");
-  return;
-}
-  try {
-    const parsedRubric = parseRubric();
-
-    const response = await fetch(`${API_BASE_URL}/questions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: questionTitle,
-        model_answer: modelAnswer,
-        rubric: parsedRubric,
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.detail || "Could not save question.");
-    }
-
-    setSaveMessage(`Question saved. ID: ${data.question_id}`);
-    loadQuestions();
-  } catch (err) {
-    setError(err.message);
-  }
-}
-
-
-function selectQuestion(questionId) {
-  setSelectedQuestionId(questionId);
-
-  const question = questions.find(
-    (item) => item.id === Number(questionId)
-  );
-
-  if (!question) return;
-
-  setQuestionTitle(question.title);
-  setModelAnswer(question.model_answer);
-  setRubricText(rubricToText(question.rubric));
-}
-
-
-function exportFinalGrades() {
-  const questionFilter = selectedQuestionId
-    ? `?question_id=${selectedQuestionId}`
-    : "";
-
-  window.open(
-    `${API_BASE_URL}/exports/final-grades.csv${questionFilter}`,
-    "_blank"
-  );
-}
-
-
-function studentNameFromFile(fileName) {
-  return fileName
-    .replace(/\.[^/.]+$/, "")
-    .replace(/[_-]/g, " ");
-}
-
-async function gradeBatchAnswers() {
-  if (batchFiles.length === 0) {
-    setError("Select one or more answer-sheet images first.");
-    return;
-  }
-
-  let parsedRubric;
-
-try {
-  parsedRubric = parseRubric();
-} catch (error) {
-  setError(error.message);
-  return;
-}
-
-if (!modelAnswer.trim()) {
-  setError("Select a Question Bank question or enter a model answer.");
-  return;
-}
-
-  setBatchLoading(true);
-  setBatchResults([]);
-  setError("");
-
-  const results = [];
-
-  for (let index = 0; index < batchFiles.length; index += 1) {
-    const file = batchFiles[index];
 
     try {
-      setBatchProgress(
-        `Processing ${index + 1} of ${batchFiles.length}: ${file.name}`
-      );
-
-      // Step 1: OCR
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const ocrResponse = await fetch(`${API_BASE_URL}/ocr`, {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!ocrResponse.ok) {
-        throw new Error("OCR could not read this image.");
-      }
-
-      const ocrData = await ocrResponse.json();
-
-      // Step 2: AI grading
-      const gradeResponse = await fetch(`${API_BASE_URL}/grade`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model_answer: modelAnswer,
-          student_answer: ocrData.extracted_text,
-          rubric: parsedRubric,
-        }),
-      });
-
-      if (!gradeResponse.ok) {
-        throw new Error("AI grading failed for this image.");
-      }
-
-      const gradeData = await gradeResponse.json();
-
-      // Step 3: save grade to SQLite
-      const saveResponse = await fetch(`${API_BASE_URL}/submissions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          student_name: studentNameFromFile(file.name),
-          question_id: selectedQuestionId
-            ? Number(selectedQuestionId)
-            : null,
-          question_title: questionTitle,
-          model_answer: modelAnswer,
-          student_answer: ocrData.extracted_text,
-          rubric: parsedRubric,
-          image_path: ocrData.image_path || "",
-          ai_score: Number(gradeData.score),
-          final_score: Number(gradeData.score),
-          max_marks: Number(gradeData.max_marks),
-          needs_review: gradeData.needs_review,
-        }),
-      });
-
-      if (!saveResponse.ok) {
-        throw new Error("Grade was created but could not be saved.");
-      }
-
-      results.push({
-        fileName: file.name,
-        status: "Saved",
-        score: gradeData.score,
-        maxMarks: gradeData.max_marks,
-      });
-    } catch (error) {
-      results.push({
-        fileName: file.name,
-        status: error.message || "Failed",
-      });
-    }
-
-    setBatchResults([...results]);
-  }
-
-  setBatchProgress(`Completed: ${batchFiles.length} answer sheets processed.`);
-  setBatchLoading(false);
-
-  loadSubmissions();
-  loadAnalytics();
-}
-
-
-
-async function deleteSelectedQuestion() {
-  if (!selectedQuestionId) {
-    setError("Select a Question Bank item before deleting it.");
-    return;
-  }
-
-  const question = questions.find(
-    (item) => item.id === Number(selectedQuestionId)
-  );
-
-  const confirmed = window.confirm(
-    `Delete this Question Bank item?\n\n${question?.title || ""}`
-  );
-
-  if (!confirmed) return;
-
-  try {
-    const response = await fetch(
-      `${API_BASE_URL}/questions/${selectedQuestionId}`,
-      {
-        method: "DELETE",
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.detail || "Could not delete the question.");
-    }
-
-    setSaveMessage(data.message);
-
-    // Clear the currently selected question from the form.
-    setSelectedQuestionId("");
-    setQuestionTitle("");
-    setModelAnswer("");
-    setRubricText("");
-    setRubricItems([]);
-
-    loadQuestions();
-  } catch (err) {
-    setError(err.message);
-  }
-}
-
-async function updateSelectedQuestion() {
-  if (!selectedQuestionId) {
-    setError("Select a Question Bank item before updating it.");
-    return;
-  }
-
-  try {
-    const parsedRubric = parseRubric();
-
-    const response = await fetch(
-      `${API_BASE_URL}/questions/${selectedQuestionId}`,
-      {
+      const response = await fetch(`${API_BASE_URL}/submissions/${submission.id}`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ final_score: Number(newScore) }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Could not update the score.");
+      }
+
+      setSaveMessage(data.message);
+      loadSubmissions();
+      loadAnalytics();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function deleteSubmission(submissionId) {
+    const confirmed = window.confirm("Delete this saved grade? This cannot be undone.");
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/submissions/${submissionId}`, {
+        method: "DELETE",
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Could not delete the submission.");
+      }
+
+      setSaveMessage(data.message);
+      loadSubmissions();
+      loadAnalytics();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function loadAnalytics() {
+    setLoadingAnalytics(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/analytics/evaluation`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error("Could not load evaluation analytics.");
+      }
+
+      setAnalytics(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoadingAnalytics(false);
+    }
+  }
+
+  function rubricToText(rubric) {
+    return rubric
+      .map(
+        (item) =>
+          `${item.point} | ${item.keywords.join(", ")} | ${item.semantic_reference} | ${item.marks}`
+      )
+      .join("\n");
+  }
+
+  async function loadQuestions() {
+    setLoadingQuestions(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/questions`);
+      if (!response.ok) {
+        throw new Error("Could not load questions.");
+      }
+      setQuestions(await response.json());
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoadingQuestions(false);
+    }
+  }
+
+  async function saveQuestion() {
+    if (!questionTitle.trim() || !modelAnswer.trim()) {
+      setError("Enter a question title and model answer before saving.");
+      return;
+    }
+    try {
+      const parsedRubric = parseRubric();
+
+      const response = await fetch(`${API_BASE_URL}/questions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: questionTitle,
           model_answer: modelAnswer,
           rubric: parsedRubric,
         }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Could not save question.");
       }
-    );
 
-    const data = await response.json();
+      setSaveMessage(`Question saved. ID: ${data.question_id}`);
+      loadQuestions();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
 
-    if (!response.ok) {
-      throw new Error(data.detail || "Could not update the question.");
+  function selectQuestion(questionId) {
+    setSelectedQuestionId(questionId);
+
+    const question = questions.find((item) => item.id === Number(questionId));
+    if (!question) return;
+
+    setQuestionTitle(question.title);
+    setModelAnswer(question.model_answer);
+    setRubricText(rubricToText(question.rubric));
+  }
+
+  function exportFinalGrades() {
+    const questionFilter = selectedQuestionId ? `?question_id=${selectedQuestionId}` : "";
+    window.open(`${API_BASE_URL}/exports/final-grades.csv${questionFilter}`, "_blank");
+  }
+
+  function studentNameFromFile(fileName) {
+    return fileName.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ");
+  }
+
+  async function gradeBatchAnswers() {
+    if (batchFiles.length === 0) {
+      setError("Select one or more answer-sheet images first.");
+      return;
     }
 
-    setRubricItems(parsedRubric);
-    setSaveMessage(data.message);
-    loadQuestions();
-  } catch (err) {
-    setError(err.message);
-  }
-}
+    let parsedRubric;
+    try {
+      parsedRubric = parseRubric();
+    } catch (err) {
+      setError(err.message);
+      return;
+    }
 
+    if (!modelAnswer.trim()) {
+      setError("Select a Question Bank question or enter a model answer.");
+      return;
+    }
+
+    setBatchLoading(true);
+    setBatchResults([]);
+    setError("");
+
+    const results = [];
+
+    for (let index = 0; index < batchFiles.length; index += 1) {
+      const file = batchFiles[index];
+
+      try {
+        setBatchProgress(`Processing ${index + 1} of ${batchFiles.length}: ${file.name}`);
+
+        // Step 1: OCR
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const ocrResponse = await fetch(`${API_BASE_URL}/ocr`, {
+          method: "POST",
+          body: formData,
+        });
+        if (!ocrResponse.ok) {
+          throw new Error("OCR could not read this image.");
+        }
+        const ocrData = await ocrResponse.json();
+
+        // Step 2: AI grading
+        const gradeResponse = await fetch(`${API_BASE_URL}/grade`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model_answer: modelAnswer,
+            student_answer: ocrData.extracted_text,
+            rubric: parsedRubric,
+          }),
+        });
+        if (!gradeResponse.ok) {
+          throw new Error("AI grading failed for this image.");
+        }
+        const gradeData = await gradeResponse.json();
+
+        // Step 3: save grade to SQLite
+        const saveResponse = await fetch(`${API_BASE_URL}/submissions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            student_name: studentNameFromFile(file.name),
+            question_id: selectedQuestionId ? Number(selectedQuestionId) : null,
+            question_title: questionTitle,
+            model_answer: modelAnswer,
+            student_answer: ocrData.extracted_text,
+            rubric: parsedRubric,
+            image_path: ocrData.image_path || "",
+            ai_score: Number(gradeData.score),
+            final_score: Number(gradeData.score),
+            max_marks: Number(gradeData.max_marks),
+            needs_review: gradeData.needs_review,
+          }),
+        });
+        if (!saveResponse.ok) {
+          throw new Error("Grade was created but could not be saved.");
+        }
+
+        results.push({
+          fileName: file.name,
+          status: "Saved",
+          score: gradeData.score,
+          maxMarks: gradeData.max_marks,
+        });
+      } catch (err) {
+        results.push({ fileName: file.name, status: err.message || "Failed" });
+      }
+
+      setBatchResults([...results]);
+    }
+
+    setBatchProgress(`Completed: ${batchFiles.length} answer sheets processed.`);
+    setBatchLoading(false);
+
+    loadSubmissions();
+    loadAnalytics();
+  }
+
+  async function deleteSelectedQuestion() {
+    if (!selectedQuestionId) {
+      setError("Select a Question Bank item before deleting it.");
+      return;
+    }
+
+    const question = questions.find((item) => item.id === Number(selectedQuestionId));
+    const confirmed = window.confirm(`Delete this Question Bank item?\n\n${question?.title || ""}`);
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/questions/${selectedQuestionId}`, {
+        method: "DELETE",
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Could not delete the question.");
+      }
+
+      setSaveMessage(data.message);
+      setSelectedQuestionId("");
+      setQuestionTitle("");
+      setModelAnswer("");
+      setRubricText("");
+      setRubricItems([]);
+      loadQuestions();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function updateSelectedQuestion() {
+    if (!selectedQuestionId) {
+      setError("Select a Question Bank item before updating it.");
+      return;
+    }
+
+    try {
+      const parsedRubric = parseRubric();
+
+      const response = await fetch(`${API_BASE_URL}/questions/${selectedQuestionId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: questionTitle,
+          model_answer: modelAnswer,
+          rubric: parsedRubric,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Could not update the question.");
+      }
+
+      setRubricItems(parsedRubric);
+      setSaveMessage(data.message);
+      loadQuestions();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  function dismissMessages() {
+    setError("");
+    setSaveMessage("");
+  }
 
   return (
-    <main>
-      <h1>Automated Answer Sheet Grader</h1>
-      <p>AI suggests marks using a teacher-defined rubric.</p>
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">✓</span>
+          <div>
+            <h1>Answer Sheet Grader</h1>
+            <p>AI suggests marks from your rubric. You make the final call.</p>
+          </div>
+        </div>
+        <nav className="tabs" aria-label="Sections">
+          {TABS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`tab ${tab === item.id ? "active" : ""}`}
+              aria-current={tab === item.id ? "page" : undefined}
+              onClick={() => setTab(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+      </header>
 
-      <form onSubmit={gradeAnswer}>
-        <label>
-          Student name
-          <input
-            value={studentName}
-            onChange={(event) => setStudentName(event.target.value)}
-            placeholder="Example: Adhi Kumar"
-            required
-          />
-        </label>
-        <section className="question-bank">
-          <h2>Question Bank</h2>
-
-          <button type="button" onClick={loadQuestions}>
-            {loadingQuestions ? "Loading..." : "Load saved questions"}
-          </button>
-
-          {questions.length > 0 && (
-            <label>
-              Select a saved question
-              <select
-                value={selectedQuestionId}
-                onChange={(event) => selectQuestion(event.target.value)}
-              >
-                <option value="">Choose a question</option>
-
-                {questions.map((question) => (
-                  <option key={question.id} value={question.id}>
-                    {question.title} ({question.max_marks} marks)
-                  </option>
-                ))}
-              </select>
-              <button
-            type="button"
-            className="delete-button"
-            onClick={deleteSelectedQuestion}
-            disabled={!selectedQuestionId}
-          >
-            Delete selected question
-          </button> 
-            </label>
-          )}
-        </section>
-        
-        <label>
-          Question title
-          <input
-            value={questionTitle}
-            onChange={(event) => {
-                setQuestionTitle(event.target.value);
-              }}
-            placeholder="Example: Explain photosynthesis"
-            required
-          />
-        </label>
-
-        <label>
-          Model answer
-          <textarea
-            value={modelAnswer}
-            onChange={(event) => setModelAnswer(event.target.value)}
-            placeholder="Teacher's reference answer"
-            required
-          />
-        </label>
-        <label>
-          Upload one answer sheet image
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/jpg"
-            onChange={(event) => {
-              setOcrFile(event.target.files?.[0] || null);
-            }}
-          />
-        </label>
-
-        <button
-          type="button"
-          onClick={extractTextFromImage}
-          disabled={ocrLoading}
-        >
-          {ocrLoading ? "Extracting text..." : "Extract text from image"}
-        </button>
-                <div className="ocr-review-grid">
-          <div className="image-preview">
-            <h3>Uploaded answer sheet</h3>
-
-            {imagePreview ? (
-              <img src={imagePreview} alt="Uploaded answer sheet preview" />
-            ) : (
-              <p>Select an image to see its preview.</p>
-            )}
+      <div className="layout">
+        {/* ---------- Question setup (always visible) ---------- */}
+        <aside className="panel question-panel">
+          <div className="panel-head">
+            <h2>Question</h2>
+            <button type="button" className="btn ghost small" onClick={loadQuestions}>
+              {loadingQuestions ? "Refreshing…" : "Refresh bank"}
+            </button>
           </div>
 
-        <label>
-          Student answer — editable OCR text
-          <textarea
-            value={studentAnswer}
-            onChange={(event) => setStudentAnswer(event.target.value)}
-            placeholder="OCR text will appear here after extraction"
-            required
-          />
-        </label>
-      </div>
-      
-      <section className="batch-section">
-        <h2>Batch grade answer sheets</h2>
-
-        <p>
-          Select multiple images. Each filename becomes the temporary student name.
-        </p>
-
-        <input
-          type="file"
-          accept="image/*"
-          multiple
-          onChange={(event) =>
-            setBatchFiles(Array.from(event.target.files || []))
-          }
-        />
-
-        {batchFiles.length > 0 && (
-          <p>{batchFiles.length} image(s) selected.</p>
-        )}
-
-        <button
-          type="button"
-          onClick={gradeBatchAnswers}
-          disabled={batchLoading}
-        >
-          {batchLoading ? "Batch grading..." : "Grade selected answer sheets"}
-        </button>
-
-        {batchProgress && <p>{batchProgress}</p>}
-
-        {batchResults.length > 0 && (
-          <table>
-            <thead>
-              <tr>
-                <th>Image file</th>
-                <th>Status</th>
-                <th>Score</th>
-              </tr>
-            </thead>
-            <tbody>
-              {batchResults.map((item) => (
-                <tr key={item.fileName}>
-                  <td>{item.fileName}</td>
-                  <td>{item.status}</td>
-                  <td>
-                    {item.score !== undefined
-                      ? `${item.score} / ${item.maxMarks}`
-                      : "-"}
-                  </td>
-                </tr>
+          <label className="field">
+            <span>Saved questions</span>
+            <select
+              value={selectedQuestionId}
+              onChange={(event) => selectQuestion(event.target.value)}
+            >
+              <option value="">
+                {questions.length ? "Choose a saved question" : "No saved questions yet"}
+              </option>
+              {questions.map((question) => (
+                <option key={question.id} value={question.id}>
+                  {question.title} ({question.max_marks} marks)
+                </option>
               ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+            </select>
+          </label>
 
-        <label>
-          Rubric — one point per line
-          <textarea
-            value={rubricText}
-            onChange={(event) => setRubricText(event.target.value)}
-            placeholder={`Uses sunlight | sunlight | Plants use sunlight for photosynthesis. | 1
-                  Uses water | water | Plants need water during photosynthesis. | 1
-                  Uses carbon dioxide | carbon dioxide, carbon | Plants use carbon dioxide from air. | 1
-                  Produces glucose or food | glucose, food | Plants make glucose or food. | 1
-                  Releases oxygen | oxygen | Oxygen is released during photosynthesis. | 1`}
-            required
-          />
-        </label>
-
-        <p>
-          Format: <code>Rubric point |keywords |expected meaning | marks</code>
-        </p>
-          <button
-            type="button"
-            onClick={updateSelectedQuestion}
-            disabled={!selectedQuestionId}
-          >
-            Update selected question
-          </button>
-          <button type="button" onClick={saveQuestion}>
-            Save current question to bank
-          </button>
-        {saveMessage && (
-            <p className="success-message">{saveMessage}</p>
-        )}
-        <button type="submit" disabled={loading}>
-          {loading ? "Grading..." : "Grade answer"}
-        </button>
-      </form>
-
-      {error && <p className="error">{error}</p>}
-
-      {result && (
-        <section className="result">
-          <h2>AI suggested result</h2>
-          <p>
-            Score: <strong>{result.score} / {result.max_marks}</strong>
-          </p>
-          <p>Rubric coverage: {result.confidence}%</p>
-          {result.needs_review && (
-            <div className="review-warning">
-              <strong>⚠️ Teacher review required</strong>
-              <p>{result.review_reason}</p>
-            </div>
-          )}
-
-          <h3>Rubric breakdown</h3>
-          <ul>
-            {result.rubric_breakdown.map((item) => (
-              <li key={item.point}>
-                <strong>{item.point}</strong>: {item.awarded_marks} / {item.marks}
-                <br />
-                Method: {item.match_method}
-                <br />
-                Semantic similarity: {item.semantic_similarity}%
-              </li>
-            ))}
-          </ul>
-
-          <hr />
-
-          <h2>Teacher review</h2>
-
-          <label>
-            Final score
+          <label className="field">
+            <span>Question title</span>
             <input
-              type="number"
-              min="0"
-              max={result.max_marks}
-              step="0.1"
-              value={finalScore}
-              onChange={(event) => {
-                setFinalScore(event.target.value);
-                setApproved(false);
-              }}
+              value={questionTitle}
+              onChange={(event) => setQuestionTitle(event.target.value)}
+              placeholder="Example: Explain photosynthesis"
             />
           </label>
 
-          <button type="button" onClick={approveScore}>
-            Approve and save final score
-          </button>
+          <label className="field">
+            <span>Model answer</span>
+            <textarea
+              value={modelAnswer}
+              onChange={(event) => setModelAnswer(event.target.value)}
+              placeholder="Teacher's reference answer"
+            />
+          </label>
 
-          {approved && (
-            <p className="approved">
-              Approved: {finalScore} / {result.max_marks}
-            </p>
-          )}
+          <label className="field">
+            <span>Rubric, one point per line</span>
+            <textarea
+              className="mono"
+              rows={7}
+              value={rubricText}
+              onChange={(event) => setRubricText(event.target.value)}
+              placeholder={RUBRIC_PLACEHOLDER}
+            />
+            <small>
+              Format: <code>Point | keywords | expected meaning | marks</code>
+            </small>
+          </label>
 
-          {saveMessage && <p className="approved">{saveMessage}</p>}
-        </section>
-      )}
-      
-
-      <section className="history">
-        <div className="section-header">
-          <h2>Saved submissions</h2>
-
-          {submissions.length > 0 && (
+          <div className="button-row">
+            <button type="button" className="btn secondary" onClick={saveQuestion}>
+              Save as new
+            </button>
             <button
               type="button"
-              className="close-button"
-              onClick={() => setSubmissions([])}
+              className="btn secondary"
+              onClick={updateSelectedQuestion}
+              disabled={!selectedQuestionId}
             >
-              Close
+              Update selected
             </button>
+            <button
+              type="button"
+              className="btn danger-outline"
+              onClick={deleteSelectedQuestion}
+              disabled={!selectedQuestionId}
+            >
+              Delete
+            </button>
+          </div>
+        </aside>
+
+        {/* ---------- Workspace ---------- */}
+        <main className="workspace">
+          {(error || saveMessage) && (
+            <div className={`banner ${error ? "banner-error" : "banner-success"}`} role="status">
+              <span>{error || saveMessage}</span>
+              <button type="button" aria-label="Dismiss message" onClick={dismissMessages}>
+                ×
+              </button>
+            </div>
           )}
-        </div>
 
-        <button type="button" onClick={exportFinalGrades}>
-          Export final grades as CSV
-        </button>
-        <button type="button" onClick={loadSubmissions}>
-          {loadingSubmissions ? "Loading..." : "Load saved grades"}
-        </button>
+          {/* ----- Single sheet ----- */}
+          {tab === "single" && (
+            <>
+              <form className="panel" onSubmit={gradeAnswer}>
+                <div className="panel-head">
+                  <h2>Answer sheet</h2>
+                </div>
 
-        {submissions.length > 0 && (
-          <table>
-            <thead>
-              <tr>
-                <th>Student</th>
-                <th>Question</th>
-                <th>AI score</th>
-                <th>Final score</th>
-                <th>Maximum</th>
-                <th>Answer Sheet</th>
-                <th>Actions</th>
-                
-              </tr>
-            </thead>
+                <label className="field">
+                  <span>Student name</span>
+                  <input
+                    value={studentName}
+                    onChange={(event) => setStudentName(event.target.value)}
+                    placeholder="Example: Adhi Kumar"
+                    required
+                  />
+                </label>
 
-            <tbody>
-              {submissions.map((submission) => (
-                <tr key={submission.id}>
-                  <td>{submission.student_name}</td>
-                  <td>{submission.question_title}</td>
-                  <td>{submission.ai_score}</td>
-                  <td>{submission.final_score}</td>
-                  <td>{submission.max_marks}</td>
-                  <td>
-                      {submission.image_path ? (
-                        <a
-                          href={`${API_BASE_URL}${submission.image_path}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          View scan
-                        </a>
-                      ) : (
-                        "No image"
-                      )}
-                    </td>
-                    <td>
-                          <button
-                            type="button"
-                            onClick={() => updateFinalScore(submission)}
-                          >
-                            Edit score
-                          </button>
+                <div className="ocr-grid">
+                  <div className="scan">
+                    {imagePreview ? (
+                      <img src={imagePreview} alt="Uploaded answer sheet preview" />
+                    ) : (
+                      <div className="scan-empty">
+                        <strong>No scan selected</strong>
+                        <span>Choose a PNG or JPG of the handwritten answer.</span>
+                      </div>
+                    )}
+                    <div className="scan-actions">
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/jpg"
+                        onChange={(event) => setOcrFile(event.target.files?.[0] || null)}
+                      />
+                      <button
+                        type="button"
+                        className="btn secondary"
+                        onClick={extractTextFromImage}
+                        disabled={ocrLoading || !ocrFile}
+                      >
+                        {ocrLoading ? "Reading handwriting…" : "Extract text"}
+                      </button>
+                    </div>
+                  </div>
 
-                          <button
-                            type="button"
-                            className="delete-button"
-                            onClick={() => deleteSubmission(submission.id)}
-                          >
-                            Delete
-                          </button>
-                    </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-      
-      <section className="analytics">
-            <div className="section-header">
-              <h2>Evaluation Analytics</h2>
+                  <label className="field fill">
+                    <span>Student answer (edit any OCR mistakes)</span>
+                    <textarea
+                      value={studentAnswer}
+                      onChange={(event) => setStudentAnswer(event.target.value)}
+                      placeholder="Extracted text appears here. You can also type or paste an answer."
+                      required
+                    />
+                  </label>
+                </div>
 
-              {analytics && (
+                <div className="button-row">
+                  <button type="submit" className="btn primary" disabled={loading}>
+                    {loading ? "Grading…" : "Grade answer"}
+                  </button>
+                </div>
+              </form>
+
+              {result && (
+                <section className="panel result">
+                  <div className="result-head">
+                    <ScoreRing score={Number(result.score)} max={Number(result.max_marks)} />
+                    <div>
+                      <h2>AI suggested score</h2>
+                      <p className="muted">Rubric coverage: {result.confidence}%</p>
+                    </div>
+                  </div>
+
+                  {result.needs_review && (
+                    <div className="review-warning">
+                      <strong>Teacher review required</strong>
+                      <p>{result.review_reason}</p>
+                    </div>
+                  )}
+
+                  <h3>Rubric breakdown</h3>
+                  <ul className="breakdown">
+                    {result.rubric_breakdown.map((item, index) => {
+                      const earned = item.marks > 0 ? item.awarded_marks / item.marks : 0;
+                      return (
+                        <li key={`${item.point}-${index}`}>
+                          <div className="breakdown-top">
+                            <strong>{item.point}</strong>
+                            <span className={earned >= 1 ? "pill pill-good" : earned > 0 ? "pill pill-mid" : "pill pill-miss"}>
+                              {item.awarded_marks} / {item.marks}
+                            </span>
+                          </div>
+                          <div className="bar" aria-hidden="true">
+                            <div style={{ width: `${Math.min(earned, 1) * 100}%` }} />
+                          </div>
+                          <small className="muted">
+                            Matched by {item.match_method} · semantic similarity {item.semantic_similarity}%
+                          </small>
+                        </li>
+                      );
+                    })}
+                  </ul>
+
+                  <div className="review-box">
+                    <h3>Your final score</h3>
+                    <div className="review-row">
+                      <label className="field score-field">
+                        <span>Out of {result.max_marks}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max={result.max_marks}
+                          step="0.1"
+                          value={finalScore}
+                          onChange={(event) => {
+                            setFinalScore(event.target.value);
+                            setApproved(false);
+                          }}
+                        />
+                      </label>
+                      <button type="button" className="btn primary" onClick={approveScore}>
+                        Approve and save
+                      </button>
+                    </div>
+                    {approved && (
+                      <p className="approved">
+                        Approved: {finalScore} / {result.max_marks}
+                      </p>
+                    )}
+                  </div>
+                </section>
+              )}
+            </>
+          )}
+
+          {/* ----- Batch ----- */}
+          {tab === "batch" && (
+            <section className="panel">
+              <div className="panel-head">
+                <h2>Batch grading</h2>
+              </div>
+              <p className="muted">
+                Grades every image against the question on the left. Each filename becomes the
+                student name, and results are saved automatically.
+              </p>
+
+              <label className="dropzone">
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(event) => setBatchFiles(Array.from(event.target.files || []))}
+                />
+                <strong>
+                  {batchFiles.length > 0
+                    ? `${batchFiles.length} image${batchFiles.length > 1 ? "s" : ""} selected`
+                    : "Choose answer-sheet images"}
+                </strong>
+                <span>
+                  {batchFiles.length > 0
+                    ? batchFiles.map((file) => file.name).join(", ")
+                    : "Select several files at once. PNG or JPG."}
+                </span>
+              </label>
+
+              <div className="button-row">
                 <button
                   type="button"
-                  className="close-button"
-                  onClick={() => setAnalytics(null)}
+                  className="btn primary"
+                  onClick={gradeBatchAnswers}
+                  disabled={batchLoading}
                 >
-                  Close
+                  {batchLoading ? "Grading…" : "Grade selected sheets"}
                 </button>
+              </div>
+
+              {batchProgress && <p className="progress-note">{batchProgress}</p>}
+
+              {batchResults.length > 0 && (
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Image file</th>
+                        <th>Status</th>
+                        <th className="num">Score</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {batchResults.map((item, index) => (
+                        <tr key={`${item.fileName}-${index}`}>
+                          <td>{item.fileName}</td>
+                          <td>
+                            <span className={item.status === "Saved" ? "pill pill-good" : "pill pill-miss"}>
+                              {item.status}
+                            </span>
+                          </td>
+                          <td className="num">
+                            {item.score !== undefined ? `${item.score} / ${item.maxMarks}` : "–"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
-            </div>
+            </section>
+          )}
 
-            <button type="button" onClick={loadAnalytics}>
-              {loadingAnalytics ? "Loading..." : "Load analytics"}
-            </button>
-
-            {analytics && (
-              <div className="analytics-grid">
-                <div className="metric">
-                  <span>Total submissions</span>
-                  <strong>{analytics.total_submissions}</strong>
-                </div>
-
-                <div className="metric">
-                  <span>Mean Absolute Error</span>
-                  <strong>{analytics.mean_absolute_error}</strong>
-                </div>
-
-                <div className="metric">
-                  <span>Exact score agreement</span>
-                  <strong>{analytics.exact_score_agreement}%</strong>
-                </div>
-
-                <div className="metric">
-                  <span>Teacher-review flags</span>
-                  <strong>{analytics.review_flag_rate}%</strong>
+          {/* ----- Records ----- */}
+          {tab === "records" && (
+            <section className="panel">
+              <div className="panel-head">
+                <h2>Saved grades</h2>
+                <div className="button-row tight">
+                  <button type="button" className="btn ghost small" onClick={loadSubmissions}>
+                    {loadingSubmissions ? "Loading…" : "Refresh"}
+                  </button>
+                  <button type="button" className="btn secondary small" onClick={exportFinalGrades}>
+                    Export CSV
+                  </button>
                 </div>
               </div>
-            )}
-          </section>
-    </main>
+
+              {submissions.length === 0 ? (
+                <div className="empty">
+                  <strong>No saved grades yet</strong>
+                  <span>Approve a score or run a batch and it will show up here.</span>
+                </div>
+              ) : (
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Student</th>
+                        <th>Question</th>
+                        <th className="num">AI</th>
+                        <th className="num">Final</th>
+                        <th className="num">Max</th>
+                        <th>Scan</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {submissions.map((submission) => (
+                        <tr key={submission.id}>
+                          <td>{submission.student_name}</td>
+                          <td>{submission.question_title}</td>
+                          <td className="num">{submission.ai_score}</td>
+                          <td className="num">
+                            <strong>{submission.final_score}</strong>
+                          </td>
+                          <td className="num">{submission.max_marks}</td>
+                          <td>
+                            {submission.image_path ? (
+                              <a
+                                href={`${API_BASE_URL}${submission.image_path}`}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                View scan
+                              </a>
+                            ) : (
+                              <span className="muted">None</span>
+                            )}
+                          </td>
+                          <td>
+                            <div className="button-row tight">
+                              <button
+                                type="button"
+                                className="btn secondary small"
+                                onClick={() => updateFinalScore(submission)}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                className="btn danger-outline small"
+                                onClick={() => deleteSubmission(submission.id)}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* ----- Analytics ----- */}
+          {tab === "analytics" && (
+            <section className="panel">
+              <div className="panel-head">
+                <h2>Evaluation analytics</h2>
+                <button type="button" className="btn ghost small" onClick={loadAnalytics}>
+                  {loadingAnalytics ? "Loading…" : "Refresh"}
+                </button>
+              </div>
+
+              {analytics ? (
+                <div className="metrics">
+                  <div className="metric">
+                    <strong>{analytics.total_submissions}</strong>
+                    <span>Total submissions</span>
+                  </div>
+                  <div className="metric">
+                    <strong>{analytics.mean_absolute_error}</strong>
+                    <span>Mean absolute error</span>
+                  </div>
+                  <div className="metric">
+                    <strong>{analytics.exact_score_agreement}%</strong>
+                    <span>Exact score agreement</span>
+                  </div>
+                  <div className="metric">
+                    <strong>{analytics.review_flag_rate}%</strong>
+                    <span>Flagged for teacher review</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="empty">
+                  <strong>No analytics loaded</strong>
+                  <span>Select Refresh to compare AI scores with your final scores.</span>
+                </div>
+              )}
+            </section>
+          )}
+        </main>
+      </div>
+    </div>
   );
 }
 
