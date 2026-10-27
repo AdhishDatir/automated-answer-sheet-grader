@@ -42,6 +42,15 @@ function ScoreRing({ score, max }) {
   );
 }
 
+function getStoredTeacher() {
+  try {
+    const savedTeacher = localStorage.getItem("gradewise_teacher");
+    return savedTeacher ? JSON.parse(savedTeacher) : null;
+  } catch {
+    return null;
+  }
+}
+
 function App() {
   const [tab, setTab] = useState("single");
 
@@ -76,6 +85,14 @@ function App() {
   const [batchLoading, setBatchLoading] = useState(false);
   const [batchProgress, setBatchProgress] = useState("");
   const [batchResults, setBatchResults] = useState([]);
+  const [teacher, setTeacher] = useState(getStoredTeacher);
+  const [authMode, setAuthMode] = useState("login");
+  const [authName, setAuthName] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
+
 
   useEffect(() => {
     if (!ocrFile) {
@@ -88,12 +105,14 @@ function App() {
   }, [ocrFile]);
 
   // Load saved data once when the page opens.
-  useEffect(() => {
-    loadQuestions();
-    loadSubmissions();
-    loadAnalytics();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+ useEffect(() => {
+  if (!teacher) return;
+
+  loadQuestions();
+  loadSubmissions();
+  loadAnalytics();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [teacher]);
 
   function parseRubric() {
     const lines = rubricText
@@ -133,6 +152,97 @@ function App() {
     });
   }
 
+
+  async function apiFetch(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+
+  if (teacher?.token) {
+    headers.set("Authorization", `Bearer ${teacher.token}`);
+  }
+
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    headers,
+  });
+
+  if (response.status === 401) {
+    localStorage.removeItem("gradewise_teacher");
+    setTeacher(null);
+  }
+
+  return response;
+}
+
+async function handleAuthentication(event) {
+  event.preventDefault();
+
+  setAuthLoading(true);
+  setAuthError("");
+
+  try {
+    const endpoint =
+      authMode === "register" ? "/auth/register" : "/auth/login";
+
+    const body =
+      authMode === "register"
+        ? {
+            name: authName,
+            email: authEmail,
+            password: authPassword,
+          }
+        : {
+            email: authEmail,
+            password: authPassword,
+          };
+
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || "Authentication failed.");
+    }
+
+    if (authMode === "register") {
+      setAuthMode("login");
+      setAuthPassword("");
+      setAuthError("Account created. Please log in.");
+      return;
+    }
+
+    const loggedInTeacher = {
+      ...data.teacher,
+      token: data.token,
+    };
+
+    localStorage.setItem(
+      "gradewise_teacher",
+      JSON.stringify(loggedInTeacher)
+    );
+
+    setTeacher(loggedInTeacher);
+    setAuthPassword("");
+  } catch (err) {
+    setAuthError(err.message);
+  } finally {
+    setAuthLoading(false);
+  }
+}
+
+function logoutTeacher() {
+  localStorage.removeItem("gradewise_teacher");
+  setTeacher(null);
+  setQuestions([]);
+  setSubmissions([]);
+  setAnalytics(null);
+}
+
   async function extractTextFromImage() {
     if (!ocrFile) {
       setError("Choose an answer-sheet image first.");
@@ -146,7 +256,7 @@ function App() {
     formData.append("file", ocrFile);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/ocr`, {
+      const response = await apiFetch("/ocr", {
         method: "POST",
         body: formData,
       });
@@ -180,7 +290,7 @@ function App() {
       }
       const parsedRubric = parseRubric();
 
-      const response = await fetch(`${API_BASE_URL}/grade`, {
+      const response = await apiFetch("/grade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -212,7 +322,7 @@ function App() {
     setError("");
 
     try {
-      const response = await fetch(`${API_BASE_URL}/submissions`, {
+      const response = await apiFetch("/submissions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -248,7 +358,7 @@ function App() {
     setLoadingSubmissions(true);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/submissions`);
+      const response = await apiFetch("/submissions");
       if (!response.ok) {
         throw new Error("Could not load saved submissions.");
       }
@@ -273,7 +383,7 @@ function App() {
     }
 
     try {
-      const response = await fetch(`${API_BASE_URL}/submissions/${submission.id}`, {
+      const response = await apiFetch(`/submissions/${submission.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ final_score: Number(newScore) }),
@@ -297,7 +407,7 @@ function App() {
     if (!confirmed) return;
 
     try {
-      const response = await fetch(`${API_BASE_URL}/submissions/${submissionId}`, {
+      const response = await apiFetch(`/submissions/${submissionId}`, {
         method: "DELETE",
       });
       const data = await response.json();
@@ -318,7 +428,7 @@ function App() {
     setLoadingAnalytics(true);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/analytics/evaluation`);
+      const response = await apiFetch("/analytics/evaluation");
       const data = await response.json();
 
       if (!response.ok) {
@@ -346,7 +456,7 @@ function App() {
     setLoadingQuestions(true);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/questions`);
+      const response = await apiFetch("/questions");
       if (!response.ok) {
         throw new Error("Could not load questions.");
       }
@@ -366,7 +476,7 @@ function App() {
     try {
       const parsedRubric = parseRubric();
 
-      const response = await fetch(`${API_BASE_URL}/questions`, {
+      const response = await apiFetch("/questions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -399,11 +509,33 @@ function App() {
     setRubricText(rubricToText(question.rubric));
   }
 
-  function exportFinalGrades() {
-    const questionFilter = selectedQuestionId ? `?question_id=${selectedQuestionId}` : "";
-    window.open(`${API_BASE_URL}/exports/final-grades.csv${questionFilter}`, "_blank");
-  }
+async function exportFinalGrades() {
+  try {
+    const questionFilter = selectedQuestionId
+      ? `?question_id=${selectedQuestionId}`
+      : "";
 
+    const response = await apiFetch(
+      `/exports/final-grades.csv${questionFilter}`
+    );
+
+    if (!response.ok) {
+      throw new Error("Could not export final grades.");
+    }
+
+    const csvFile = await response.blob();
+    const downloadUrl = URL.createObjectURL(csvFile);
+
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = "final-grades.csv";
+    link.click();
+
+    URL.revokeObjectURL(downloadUrl);
+  } catch (err) {
+    setError(err.message);
+  }
+}
   function studentNameFromFile(fileName) {
     return fileName.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ");
   }
@@ -443,7 +575,7 @@ function App() {
         const formData = new FormData();
         formData.append("file", file);
 
-        const ocrResponse = await fetch(`${API_BASE_URL}/ocr`, {
+        const ocrResponse = await apiFetch("/ocr", {
           method: "POST",
           body: formData,
         });
@@ -453,7 +585,7 @@ function App() {
         const ocrData = await ocrResponse.json();
 
         // Step 2: AI grading
-        const gradeResponse = await fetch(`${API_BASE_URL}/grade`, {
+        const gradeResponse = await apiFetch("/grade", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -468,7 +600,7 @@ function App() {
         const gradeData = await gradeResponse.json();
 
         // Step 3: save grade to SQLite
-        const saveResponse = await fetch(`${API_BASE_URL}/submissions`, {
+        const saveResponse = await apiFetch("/submissions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -520,7 +652,7 @@ function App() {
     if (!confirmed) return;
 
     try {
-      const response = await fetch(`${API_BASE_URL}/questions/${selectedQuestionId}`, {
+      const response = await apiFetch(`/questions/${selectedQuestionId}`, {
         method: "DELETE",
       });
       const data = await response.json();
@@ -550,7 +682,7 @@ function App() {
     try {
       const parsedRubric = parseRubric();
 
-      const response = await fetch(`${API_BASE_URL}/questions/${selectedQuestionId}`, {
+      const response = await apiFetch(`/questions/${selectedQuestionId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -578,9 +710,104 @@ function App() {
     setSaveMessage("");
   }
 
+if (!teacher) {
+  return (
+    <main className="auth-page">
+      <section className="auth-card">
+        <p className="auth-logo">✓</p>
+        <p className="eyebrow">GRADEWISE AI</p>
+
+        <h1>
+          {authMode === "login"
+            ? "Welcome back"
+            : "Create teacher account"}
+        </h1>
+
+        <p className="auth-description">
+          {authMode === "login"
+            ? "Log in to access your grading dashboard."
+            : "Create an account to manage questions and grades."}
+        </p>
+
+        <form onSubmit={handleAuthentication} className="auth-form">
+          {authMode === "register" && (
+            <label className="field">
+              <span>Full name</span>
+              <input
+                value={authName}
+                onChange={(event) => setAuthName(event.target.value)}
+                placeholder="Example: Adhi Kumar"
+                required
+              />
+            </label>
+          )}
+
+          <label className="field">
+            <span>Email address</span>
+            <input
+              type="email"
+              value={authEmail}
+              onChange={(event) => setAuthEmail(event.target.value)}
+              placeholder="teacher@example.com"
+              required
+            />
+          </label>
+
+          <label className="field">
+            <span>Password</span>
+            <input
+              type="password"
+              value={authPassword}
+              onChange={(event) => setAuthPassword(event.target.value)}
+              placeholder="Minimum 8 characters"
+              minLength="8"
+              required
+            />
+          </label>
+
+          {authError && <p className="auth-error">{authError}</p>}
+
+          <button type="submit" className="btn primary auth-submit">
+            {authLoading
+              ? "Please wait..."
+              : authMode === "login"
+              ? "Log in"
+              : "Create account"}
+          </button>
+        </form>
+
+        <button
+          type="button"
+          className="auth-switch"
+          onClick={() => {
+            setAuthMode(authMode === "login" ? "register" : "login");
+            setAuthError("");
+          }}
+        >
+          {authMode === "login"
+            ? "New teacher? Create an account"
+            : "Already have an account? Log in"}
+        </button>
+      </section>
+    </main>
+  );
+}
+
+
   return (
     <div className="app">
       <header className="topbar">
+        <div className="teacher-menu">
+            <span>👤 {teacher.name}</span>
+
+            <button
+              type="button"
+              className="btn ghost small logout-button"
+              onClick={logoutTeacher}
+            >
+              Logout
+            </button>
+          </div>
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">✓</span>
           <div>

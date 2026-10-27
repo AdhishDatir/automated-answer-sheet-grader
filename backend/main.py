@@ -3,6 +3,11 @@ import re
 import sqlite3
 import csv
 import pytesseract
+import hashlib
+import hmac
+import secrets
+
+
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -10,7 +15,7 @@ from uuid import uuid4
 
 from io import StringIO
 from fastapi.responses import StreamingResponse
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps, UnidentifiedImageError
@@ -90,12 +95,65 @@ class SubmissionUpdateRequest(BaseModel):
     student_answer: str | None = None
     final_score: float | None = None
 
+
+class TeacherRegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+
+class TeacherLoginRequest(BaseModel):
+    email: str
+    password: str
+
 DB_NAME = "grader.db"  
 
 def get_db_connection():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     return conn
+
+ACTIVE_SESSIONS = {}
+
+
+def hash_password(password: str, salt: str | None = None):
+    if salt is None:
+        salt = secrets.token_hex(16)
+
+    password_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        100_000,
+    ).hex()
+
+    return f"{salt}${password_hash}"
+
+
+def verify_password(password: str, stored_password: str):
+    salt, stored_hash = stored_password.split("$", 1)
+    calculated_hash = hash_password(password, salt).split("$", 1)[1]
+
+    return hmac.compare_digest(calculated_hash, stored_hash)
+
+
+def require_teacher(authorization: str | None = Header(default=None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Login is required.",
+        )
+
+    token = authorization.removeprefix("Bearer ").strip()
+    teacher = ACTIVE_SESSIONS.get(token)
+
+    if not teacher:
+        raise HTTPException(
+            status_code=401,
+            detail="Your session has expired. Please log in again.",
+        )
+
+    return teacher
 
 def get_connection():
     return sqlite3.connect(DATABASE_FILE)
@@ -134,6 +192,15 @@ def create_database():
         )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS teachers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL
+        )
+        """)
     connection.commit()
     connection.close()
 
@@ -291,8 +358,104 @@ def welcome():
     }
 
 
+@app.post("/auth/register")
+def register_teacher(data: TeacherRegisterRequest):
+    name = data.name.strip()
+    email = data.email.strip().lower()
+    password = data.password
+
+    if not name or not email:
+        raise HTTPException(
+            status_code=400,
+            detail="Name and email are required.",
+        )
+
+    if len(password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least 8 characters.",
+        )
+
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    try:
+        cursor.execute(
+            """
+            INSERT INTO teachers (name, email, password_hash, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                name,
+                email,
+                hash_password(password),
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+
+        connection.commit()
+
+    except sqlite3.IntegrityError:
+        connection.close()
+
+        raise HTTPException(
+            status_code=400,
+            detail="A teacher account with this email already exists.",
+        )
+
+    teacher_id = cursor.lastrowid
+    connection.close()
+
+    return {
+        "message": "Teacher account created successfully.",
+        "teacher_id": teacher_id,
+    }
+
+
+@app.post("/auth/login")
+def login_teacher(data: TeacherLoginRequest):
+    connection = get_connection()
+    connection.row_factory = sqlite3.Row
+    cursor = connection.cursor()
+
+    teacher = cursor.execute(
+        "SELECT * FROM teachers WHERE email = ?",
+        (data.email.strip().lower(),),
+    ).fetchone()
+
+    connection.close()
+
+    if not teacher or not verify_password(data.password, teacher["password_hash"]):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect email or password.",
+        )
+
+    token = secrets.token_urlsafe(32)
+
+    ACTIVE_SESSIONS[token] = {
+        "id": teacher["id"],
+        "name": teacher["name"],
+        "email": teacher["email"],
+    }
+
+    return {
+        "message": "Login successful.",
+        "token": token,
+        "teacher": ACTIVE_SESSIONS[token],
+    }
+
+
+@app.get("/auth/me")
+def get_logged_in_teacher(teacher: dict = Depends(require_teacher)):
+    return teacher
+
+
 @app.post("/ocr")
-async def extract_text_from_image(file: UploadFile = File(...)):
+async def extract_text_from_image(
+    file: UploadFile = File(...),
+    teacher: dict = Depends(require_teacher),
+):
     allowed_extensions = {".jpg", ".jpeg", ".png"}
 
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -366,7 +529,10 @@ async def extract_text_from_image(file: UploadFile = File(...)):
 
 
 @app.post("/grade")
-def grade_answer(data: GradeRequest):
+def grade_answer(
+    data: GradeRequest,
+    teacher: dict = Depends(require_teacher),
+):
     validate_rubric(data.rubric)
 
     student_text = clean_text(data.student_answer)
@@ -444,7 +610,10 @@ def grade_answer(data: GradeRequest):
 
 
 @app.post("/questions")
-def save_question(data: QuestionRequest):
+def save_question(
+    data: QuestionRequest,
+    teacher: dict = Depends(require_teacher),
+):
     validate_rubric(data.rubric)
 
     max_marks = sum(item.marks for item in data.rubric)
@@ -481,7 +650,9 @@ def save_question(data: QuestionRequest):
 
 
 @app.get("/questions")
-def get_questions():
+def get_questions(
+    teacher: dict = Depends(require_teacher),
+):
     connection = get_connection()
     connection.row_factory = sqlite3.Row
     cursor = connection.cursor()
@@ -504,7 +675,10 @@ def get_questions():
     return questions
 
 @app.delete("/questions/{question_id}")
-def delete_question(question_id: int):
+def delete_question(
+    question_id: int,
+    teacher: dict = Depends(require_teacher),
+):
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -523,7 +697,11 @@ def delete_question(question_id: int):
 
 
 @app.put("/questions/{question_id}")
-def update_question(question_id: int, data: QuestionRequest):
+def update_question(
+    question_id: int,
+    data: QuestionRequest,
+    teacher: dict = Depends(require_teacher),
+):
     validate_rubric(data.rubric)
 
     if not data.title.strip() or not data.model_answer.strip():
@@ -570,7 +748,10 @@ def update_question(question_id: int, data: QuestionRequest):
     }
 
 @app.post("/submissions")
-def save_submission(data: SubmissionRequest):
+def save_submission(
+    data: SubmissionRequest,
+    teacher: dict = Depends(require_teacher),
+):
     validate_rubric(data.rubric)
 
     if data.final_score < 0 or data.final_score > data.max_marks:
@@ -628,7 +809,9 @@ def save_submission(data: SubmissionRequest):
 
 
 @app.get("/submissions")
-def get_submissions():
+def get_submissions(
+    teacher: dict = Depends(require_teacher),
+):
     connection = get_connection()
     connection.row_factory = sqlite3.Row
     cursor = connection.cursor()
@@ -655,6 +838,7 @@ def get_submissions():
 def update_submission(
     submission_id: int,
     data: SubmissionUpdateRequest,
+    teacher: dict = Depends(require_teacher),
 ):
     connection = get_connection()
     connection.row_factory = sqlite3.Row
@@ -730,7 +914,10 @@ def update_submission(
 
 
 @app.delete("/submissions/{submission_id}")
-def delete_submission(submission_id: int):
+def delete_submission(
+    submission_id: int,
+    teacher: dict = Depends(require_teacher),
+):
     connection = get_connection()
     cursor = connection.cursor()
 
@@ -755,7 +942,10 @@ def delete_submission(submission_id: int):
     }
 
 @app.get("/exports/final-grades.csv")
-def export_final_grades(question_id: int | None = None):
+def export_final_grades(
+    question_id: int | None = None,
+    teacher: dict = Depends(require_teacher),
+):
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -820,7 +1010,9 @@ def export_final_grades(question_id: int | None = None):
     )
 
 @app.get("/analytics/evaluation")
-def get_evaluation_metrics():
+def get_evaluation_metrics(
+    teacher: dict = Depends(require_teacher),
+):
     connection = get_connection()
     connection.row_factory = sqlite3.Row
     cursor = connection.cursor()
